@@ -1,21 +1,47 @@
-# Kestrel Aggregator
+<div align="center">
+  <img src="logo.png" alt="Magpie Logo" width="200"/>
 
-Fast, concurrent blocklist aggregation and validation tool.
+  # Magpie
+
+  **Fast, concurrent blocklist aggregation and validation tool**
+
+  [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
+  [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+  [![Built with Go](https://img.shields.io/badge/built%20with-Go-00ADD8.svg)](https://golang.org)
+  [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-success.svg)](go.mod)
+
+</div>
+
+---
+
+## Overview
+
+Magpie is a high-performance blocklist aggregator that fetches, validates, and combines domain blocklists from multiple sources. Built in pure Go with zero external dependencies, it's designed for speed and reliability.
 
 ## Features
 
-- **Multi-Source Fetching** - Download blocklists from multiple HTTP/HTTPS sources
+- **Multi-Source Fetching** - Download blocklists from multiple HTTP/HTTPS sources concurrently
 - **Format Support** - Parses hosts files, plain domain lists, and various blocklist formats
 - **DNS Validation** - Validates domains have A, AAAA, or CNAME records
 - **HTTP Validation** - Optional HTTP/HTTPS connectivity checks
 - **Deduplication** - Automatically removes duplicate domains
-- **Concurrent Processing** - Multi-threaded validation for speed
-- **Zero Dependencies** - Pure Go, no external dependencies
+- **Concurrent Processing** - Multi-threaded validation for maximum speed
+- **Zero Dependencies** - Pure Go, no external dependencies required
 
 ## Installation
 
+### From Source
+
 ```bash
-go build -o aggregator ./cmd/aggregator
+git clone https://github.com/pigeonsec/magpie.git
+cd magpie
+go build -o magpie ./cmd/aggregator
+```
+
+### Quick Install
+
+```bash
+go install github.com/pigeonsec/magpie/cmd/aggregator@latest
 ```
 
 ## Usage
@@ -24,19 +50,19 @@ go build -o aggregator ./cmd/aggregator
 
 ```bash
 # Aggregate with DNS validation (default)
-./aggregator -source-file sources.txt -output aggregated.txt
+./magpie -source-file sources.txt -output aggregated.txt
 
 # Aggregate without validation
-./aggregator -source-file sources.txt -output aggregated.txt -dns=false
+./magpie -source-file sources.txt -output aggregated.txt -dns=false
 
 # Aggregate with full validation (DNS + HTTP)
-./aggregator -source-file sources.txt -output aggregated.txt -http
+./magpie -source-file sources.txt -output aggregated.txt -http
 
 # Use more workers for faster validation
-./aggregator -source-file sources.txt -workers 20
+./magpie -source-file sources.txt -workers 20
 
 # Quiet mode
-./aggregator -source-file sources.txt -quiet
+./magpie -source-file sources.txt -quiet
 ```
 
 ### Source File Format
@@ -54,7 +80,7 @@ https://somecdn.somewhere.com/badlist.txt
 
 ### Supported Blocklist Formats
 
-The aggregator automatically parses various formats:
+Magpie automatically parses various formats:
 
 ```text
 # Plain domains
@@ -84,7 +110,7 @@ Checks if domain has:
 - CNAME records
 
 ```bash
-./aggregator -source-file sources.txt -dns
+./magpie -source-file sources.txt -dns
 ```
 
 ### HTTP Validation
@@ -92,7 +118,7 @@ Checks if domain has:
 Attempts to connect via HTTP/HTTPS:
 
 ```bash
-./aggregator -source-file sources.txt -http
+./magpie -source-file sources.txt -http
 ```
 
 This performs DNS validation first, then checks HTTP connectivity.
@@ -102,33 +128,20 @@ This performs DNS validation first, then checks HTTP connectivity.
 Skip validation for faster aggregation:
 
 ```bash
-./aggregator -source-file sources.txt -dns=false
+./magpie -source-file sources.txt -dns=false
 ```
 
 ## CLI Options
 
-```
--source-file string
-    File containing URLs to fetch (one per line) [REQUIRED]
-
--output string
-    Output file for aggregated domains (default "aggregated.txt")
-
--dns
-    Enable DNS validation (A, AAAA, CNAME) (default true)
-
--http
-    Enable HTTP validation (in addition to DNS)
-
--workers int
-    Number of concurrent validation workers (default 10)
-
--quiet
-    Quiet mode - minimal output
-
--version
-    Show version information
-```
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `-source-file` | string | *required* | File containing URLs to fetch (one per line) |
+| `-output` | string | `aggregated.txt` | Output file for aggregated domains |
+| `-dns` | bool | `true` | Enable DNS validation (A, AAAA, CNAME) |
+| `-http` | bool | `false` | Enable HTTP validation (in addition to DNS) |
+| `-workers` | int | `10` | Number of concurrent validation workers |
+| `-quiet` | bool | `false` | Quiet mode - minimal output |
+| `-version` | bool | `false` | Show version information |
 
 ## Examples
 
@@ -142,7 +155,7 @@ https://www.malwaredomainlist.com/hostslist/hosts.txt
 EOF
 
 # Run aggregator
-./aggregator -source-file sources.txt -output blocklist.txt
+./magpie -source-file sources.txt -output blocklist.txt
 
 # Output:
 # URLs fetched:        2
@@ -156,7 +169,7 @@ EOF
 
 ```bash
 # Validate with both DNS and HTTP
-./aggregator -source-file sources.txt \
+./magpie -source-file sources.txt \
   -output validated.txt \
   -http \
   -workers 50
@@ -166,7 +179,7 @@ EOF
 
 ```bash
 # Skip validation for speed
-./aggregator -source-file sources.txt \
+./magpie -source-file sources.txt \
   -output quick-list.txt \
   -dns=false
 ```
@@ -182,18 +195,20 @@ ads.tracking.com
 ```
 
 This format is compatible with:
-- Pi-hole
-- AdGuard Home
+- [Pi-hole](https://pi-hole.net/)
+- [AdGuard Home](https://adguard.com/en/adguard-home/overview.html)
 - DNS sinkholes
 - Firewalls
 - Proxy servers
 
 ## Performance
 
-- **Fetching**: Parallel with retry logic
-- **Validation**: Concurrent workers (configurable)
-- **Memory**: Efficient deduplication using maps
-- **Speed**: ~1000-5000 domains/second validation (DNS only)
+| Metric | Performance |
+|--------|-------------|
+| **Fetching** | Parallel with retry logic |
+| **Validation** | Concurrent workers (configurable) |
+| **Memory** | Efficient deduplication using maps |
+| **Speed** | ~1,000-5,000 domains/second (DNS only) |
 
 ## Use Cases
 
@@ -202,7 +217,7 @@ This format is compatible with:
 Aggregate multiple blocklists into one:
 
 ```bash
-./aggregator -source-file pihole-sources.txt -output pihole-combined.txt
+./magpie -source-file pihole-sources.txt -output pihole-combined.txt
 ```
 
 ### Enterprise DNS Filtering
@@ -210,7 +225,7 @@ Aggregate multiple blocklists into one:
 Create validated, production-ready blocklists:
 
 ```bash
-./aggregator -source-file enterprise-sources.txt \
+./magpie -source-file enterprise-sources.txt \
   -output enterprise-blocklist.txt \
   -http \
   -workers 50
@@ -221,18 +236,18 @@ Create validated, production-ready blocklists:
 Collect domains without validation:
 
 ```bash
-./aggregator -source-file research-sources.txt \
+./magpie -source-file research-sources.txt \
   -output all-domains.txt \
   -dns=false
 ```
 
 ## Integration with Kestrel
 
-Use the aggregator output with Kestrel threat intelligence server:
+Use Magpie output with [Kestrel](https://github.com/pigeonsec/kestrel) threat intelligence server:
 
 ```bash
 # 1. Aggregate blocklists
-./aggregator -source-file sources.txt -output aggregated.txt
+./magpie -source-file sources.txt -output aggregated.txt
 
 # 2. Ingest into Kestrel
 while read domain; do
@@ -243,7 +258,18 @@ while read domain; do
 done < aggregated.txt
 ```
 
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
 ## License
 
-Same license as Kestrel project.
-# magpie
+This project is licensed under the same license as the [Kestrel](https://github.com/pigeonsec/kestrel) project.
+
+---
+
+<div align="center">
+
+  Made with :bird: by [PigeonSec](https://github.com/pigeonsec)
+
+</div>
