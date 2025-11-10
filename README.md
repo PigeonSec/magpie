@@ -45,33 +45,54 @@ https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
 https://v.firebog.net/hosts/static/w3kbl.txt
 EOF
 
-# Aggregate with DNS validation
-./magpie -source-file sources.txt -output blocklist.txt
+# Aggregate with DNS validation (long form)
+./magpie -source sources.txt -output blocklist.txt
+
+# Or use short flags
+./magpie -s sources.txt -o blocklist.txt
 
 # Fast mode (no validation)
-./magpie -source-file sources.txt -output blocklist.txt -dns=false
+./magpie -s sources.txt -o blocklist.txt -dns=false
 
 # View statistics
-./magpie --show-stats
+./magpie --stats
 ```
 
 ## CLI Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-source-file` | *required* | File containing URLs to fetch (one per line) |
-| `-output` | `aggregated.txt` | Output file for aggregated domains |
-| `-dns` | `true` | Enable DNS validation (A, AAAA, CNAME) |
-| `-http` | `false` | Enable HTTP validation (in addition to DNS) |
-| `-workers` | `100` | Number of concurrent validation workers |
-| `-fetch-workers` | `5` | Number of concurrent URL fetchers |
-| `-dns-resolvers` | `1.1.1.1:53,...` | Comma-separated DNS resolvers |
-| `-cache` | `true` | Enable DNS result caching (5min TTL) |
-| `-data-dir` | `./data` | Directory for stats.json |
-| `-no-tracking` | `false` | Disable URL health tracking |
-| `-show-stats` | `false` | Display stats table and exit |
-| `-quiet` | `false` | Minimal output |
-| `-version` | `false` | Show version |
+### Input/Output
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `-source` | `-s` | *required* | Source file containing URLs to fetch (one per line) |
+| `-output` | `-o` | `aggregated.txt` | Output file for aggregated domains |
+
+### Validation
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `-dns` | `-d` | `true` | Enable DNS validation (A, AAAA, CNAME) |
+| `-http` | `-H` | `false` | Enable HTTP validation (in addition to DNS) |
+| `-workers` | `-w` | `100` | Number of concurrent validation workers |
+| `-resolvers` | `-r` | `1.1.1.1:53,...` | Comma-separated DNS resolvers (Cloudflare, Google, Quad9) |
+
+### Performance
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `-fetch-workers` | `-f` | `5` | Number of concurrent URL fetchers |
+| `-cache` | `-c` | `true` | Enable DNS result caching (5min TTL) |
+
+### Stats & Filtering
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--data-dir` | - | `./data` | Directory for stats.json and persistent data |
+| `--no-tracking` | - | `false` | Disable URL health tracking and auto-filtering |
+
+### General Options
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `-quiet` | `-q` | `false` | Quiet mode - minimal output |
+| `-version` | `-v` | `false` | Show version information |
+| `--stats` | - | `false` | Display stats table and exit |
+| `--help` | `-h` | `false` | Show help message |
 
 ## Performance
 
@@ -201,39 +222,41 @@ Magpie uses 6 public DNS resolvers in round-robin to bypass Pi-hole and ensure a
 3. If no AAAA → check CNAME record
 4. Cache result for 5 minutes
 
-**Custom resolvers:**
-```bash
-./magpie -source-file sources.txt -dns-resolvers "1.1.1.1:53,8.8.8.8:53"
-```
-
 ## Examples
 
 ### Basic Aggregation
 ```bash
-./magpie -source-file sources.txt -output blocklist.txt
+# Long form
+./magpie -source sources.txt -output blocklist.txt
+
+# Short form
+./magpie -s sources.txt -o blocklist.txt
 ```
 
 ### Maximum Performance
 ```bash
-./magpie -source-file sources.txt \
-  -output blocklist.txt \
-  -workers 150 \
-  -fetch-workers 10
+# Using short flags for brevity
+./magpie -s sources.txt -o blocklist.txt -w 150 -f 10
 ```
 
 ### No Validation (Fastest)
 ```bash
-./magpie -source-file sources.txt \
-  -output blocklist.txt \
-  -dns=false
+./magpie -s sources.txt -o blocklist.txt -dns=false
 ```
 
 ### Full HTTP Validation
 ```bash
-./magpie -source-file sources.txt \
-  -output blocklist.txt \
-  -http \
-  -workers 50
+./magpie -s sources.txt -o blocklist.txt -H -w 50
+```
+
+### Custom DNS Resolvers
+```bash
+./magpie -s sources.txt -o blocklist.txt -r "1.1.1.1:53,8.8.8.8:53"
+```
+
+### Quiet Mode (for Scripts)
+```bash
+./magpie -s sources.txt -o blocklist.txt -q
 ```
 
 ## Integration with Kestrel
@@ -241,8 +264,8 @@ Magpie uses 6 public DNS resolvers in round-robin to bypass Pi-hole and ensure a
 Use Magpie output with [Kestrel](https://github.com/pigeonsec/kestrel) threat intelligence server:
 
 ```bash
-# Aggregate blocklists
-./magpie -source-file sources.txt -output aggregated.txt
+# Aggregate blocklists with short flags
+./magpie -s sources.txt -o aggregated.txt
 
 # Ingest into Kestrel
 while read domain; do

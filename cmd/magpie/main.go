@@ -30,28 +30,118 @@ var (
 	version = "1.0.0"
 
 	// Input/Output
-	sourceFile = flag.String("source-file", "", "File containing URLs to fetch (one per line)")
-	outputFile = flag.String("output", "aggregated.txt", "Output file for aggregated domains")
+	sourceFile string
+	outputFile string
 
 	// Validation
-	enableDNS    = flag.Bool("dns", true, "Enable DNS validation (A, AAAA, CNAME)")
-	enableHTTP   = flag.Bool("http", false, "Enable HTTP validation (in addition to DNS)")
-	workers      = flag.Int("workers", 100, "Number of concurrent validation workers")
-	dnsResolvers = flag.String("dns-resolvers", "1.1.1.1:53,1.0.0.1:53,8.8.8.8:53,8.8.4.4:53,9.9.9.9:53,149.112.112.112:53", "Comma-separated DNS resolvers (bypasses Pi-hole)")
+	enableDNS    bool
+	enableHTTP   bool
+	workers      int
+	dnsResolvers string
 
 	// Performance
-	fetchWorkers = flag.Int("fetch-workers", 5, "Number of concurrent URL fetchers")
-	enableCache  = flag.Bool("cache", true, "Enable DNS result caching")
+	fetchWorkers int
+	enableCache  bool
 
 	// Stats & Filtering
-	dataDir    = flag.String("data-dir", "./data", "Directory for stats.json and persistent data")
-	noTracking = flag.Bool("no-tracking", false, "Disable URL health tracking and filtering")
+	dataDir    string
+	noTracking bool
 
 	// Options
-	quiet     = flag.Bool("quiet", false, "Quiet mode - minimal output")
-	showVer   = flag.Bool("version", false, "Show version information")
-	showStats = flag.Bool("show-stats", false, "Display stats table and exit")
+	quiet     bool
+	showVer   bool
+	showStats bool
 )
+
+func init() {
+	// Input/Output flags
+	flag.StringVar(&sourceFile, "source", "", "Source file containing URLs to fetch (one per line)")
+	flag.StringVar(&sourceFile, "s", "", "Shorthand for -source")
+	flag.StringVar(&outputFile, "output", "aggregated.txt", "Output file for aggregated domains")
+	flag.StringVar(&outputFile, "o", "aggregated.txt", "Shorthand for -output")
+
+	// Validation flags
+	flag.BoolVar(&enableDNS, "dns", true, "Enable DNS validation (A, AAAA, CNAME)")
+	flag.BoolVar(&enableDNS, "d", true, "Shorthand for -dns")
+	flag.BoolVar(&enableHTTP, "http", false, "Enable HTTP validation (in addition to DNS)")
+	flag.BoolVar(&enableHTTP, "H", false, "Shorthand for -http")
+	flag.IntVar(&workers, "workers", 100, "Number of concurrent validation workers")
+	flag.IntVar(&workers, "w", 100, "Shorthand for -workers")
+	flag.StringVar(&dnsResolvers, "resolvers", "1.1.1.1:53,1.0.0.1:53,8.8.8.8:53,8.8.4.4:53,9.9.9.9:53,149.112.112.112:53", "Comma-separated DNS resolvers")
+	flag.StringVar(&dnsResolvers, "r", "1.1.1.1:53,1.0.0.1:53,8.8.8.8:53,8.8.4.4:53,9.9.9.9:53,149.112.112.112:53", "Shorthand for -resolvers")
+
+	// Performance flags
+	flag.IntVar(&fetchWorkers, "fetch-workers", 5, "Number of concurrent URL fetchers")
+	flag.IntVar(&fetchWorkers, "f", 5, "Shorthand for -fetch-workers")
+	flag.BoolVar(&enableCache, "cache", true, "Enable DNS result caching (5min TTL)")
+	flag.BoolVar(&enableCache, "c", true, "Shorthand for -cache")
+
+	// Stats & Filtering flags
+	flag.StringVar(&dataDir, "data-dir", "./data", "Directory for stats.json and persistent data")
+	flag.BoolVar(&noTracking, "no-tracking", false, "Disable URL health tracking and filtering")
+
+	// Options flags
+	flag.BoolVar(&quiet, "quiet", false, "Quiet mode - minimal output")
+	flag.BoolVar(&quiet, "q", false, "Shorthand for -quiet")
+	flag.BoolVar(&showVer, "version", false, "Show version information")
+	flag.BoolVar(&showVer, "v", false, "Shorthand for -version")
+	flag.BoolVar(&showStats, "stats", false, "Display stats table and exit")
+
+	// Custom usage message
+	flag.Usage = printUsage
+}
+
+func printUsage() {
+	fmt.Fprintf(os.Stderr, `%s
+Usage: magpie [OPTIONS]
+
+A high-performance blocklist aggregator with smart filtering and DNS validation.
+
+INPUT/OUTPUT:
+  -s, -source <file>       Source file containing URLs to fetch (one per line) [REQUIRED]
+  -o, -output <file>       Output file for aggregated domains (default: aggregated.txt)
+
+VALIDATION:
+  -d, -dns                 Enable DNS validation - checks A, AAAA, CNAME records (default: true)
+  -H, -http                Enable HTTP validation in addition to DNS (default: false)
+  -w, -workers <n>         Number of concurrent validation workers (default: 100)
+  -r, -resolvers <list>    Comma-separated DNS resolvers (default: Cloudflare, Google, Quad9)
+
+PERFORMANCE:
+  -f, -fetch-workers <n>   Number of concurrent URL fetchers (default: 5)
+  -c, -cache               Enable DNS result caching with 5min TTL (default: true)
+
+STATS & FILTERING:
+  --data-dir <dir>         Directory for stats.json and persistent data (default: ./data)
+  --no-tracking            Disable URL health tracking and auto-filtering
+
+OPTIONS:
+  -q, -quiet               Quiet mode - minimal output
+  -v, -version             Show version information
+  --stats                  Display stats table and exit
+  -h, --help               Show this help message
+
+EXAMPLES:
+  # Basic aggregation with DNS validation
+  magpie -s sources.txt -o blocklist.txt
+
+  # Fast mode - no validation
+  magpie -s sources.txt -o blocklist.txt -dns=false
+
+  # Maximum filtering - DNS + HTTP validation
+  magpie -s sources.txt -o blocklist.txt -http -w 50
+
+  # High performance - more workers
+  magpie -s sources.txt -o blocklist.txt -w 200 -f 10
+
+  # View statistics
+  magpie --stats
+
+DOCUMENTATION:
+  https://github.com/pigeonsec/magpie
+
+`, logo)
+}
 
 type AggregationStats struct {
 	URLsFetched     int
@@ -67,14 +157,14 @@ type AggregationStats struct {
 func main() {
 	flag.Parse()
 
-	if *showVer {
+	if showVer {
 		fmt.Printf("Magpie version %s\n", version)
 		return
 	}
 
 	// Show stats and exit if requested
-	if *showStats {
-		dataPath, err := filepath.Abs(*dataDir)
+	if showStats {
+		dataPath, err := filepath.Abs(dataDir)
 		if err != nil {
 			log.Fatalf("Failed to resolve data directory: %v", err)
 		}
@@ -88,31 +178,31 @@ func main() {
 		return
 	}
 
-	if *sourceFile == "" {
+	if sourceFile == "" {
 		flag.Usage()
-		fmt.Println("\nError: -source-file is required")
+		fmt.Println("\nError: -source or -s is required")
 		os.Exit(1)
 	}
 
-	if !*quiet {
+	if !quiet {
 		fmt.Print(logo)
-		log.Printf("Starting aggregation from %s", *sourceFile)
+		log.Printf("Starting aggregation from %s", sourceFile)
 	}
 
 	// Check internet connection before starting
 	ctx := context.Background()
-	if !*quiet {
+	if !quiet {
 		log.Printf("Checking internet connection...")
 	}
-	if err := netutil.CheckConnectionWithRetry(ctx, *quiet); err != nil {
+	if err := netutil.CheckConnectionWithRetry(ctx, quiet); err != nil {
 		log.Fatalf("No internet connection: %v", err)
 	}
-	if !*quiet {
+	if !quiet {
 		log.Printf("✓ Internet connection verified")
 	}
 
 	// Load URLs
-	allURLs, err := loadURLs(*sourceFile)
+	allURLs, err := loadURLs(sourceFile)
 	if err != nil {
 		log.Fatalf("Failed to load source file: %v", err)
 	}
@@ -122,9 +212,9 @@ func main() {
 	var urls []string
 	var filteredURLs []string
 
-	if !*noTracking {
+	if !noTracking {
 		// Expand data directory path
-		dataPath, err := filepath.Abs(*dataDir)
+		dataPath, err := filepath.Abs(dataDir)
 		if err != nil {
 			log.Fatalf("Failed to resolve data directory: %v", err)
 		}
@@ -137,7 +227,7 @@ func main() {
 		// Filter out blacklisted URLs
 		urls, filteredURLs = tracker.FilterURLs(allURLs)
 
-		if !*quiet {
+		if !quiet {
 			log.Printf("Loaded %d source URLs", len(allURLs))
 			if len(filteredURLs) > 0 {
 				log.Printf("⚠️  Filtered out %d blacklisted URLs (failed %d+ times)", len(filteredURLs), stats.MaxFailures)
@@ -147,13 +237,13 @@ func main() {
 					}
 				}
 			}
-			log.Printf("Processing %d active URLs with %d parallel fetchers", len(urls), *fetchWorkers)
+			log.Printf("Processing %d active URLs with %d parallel fetchers", len(urls), fetchWorkers)
 		}
 	} else {
 		urls = allURLs
-		if !*quiet {
+		if !quiet {
 			log.Printf("Loaded %d source URLs (tracking disabled)", len(urls))
-			log.Printf("Using %d parallel fetchers", *fetchWorkers)
+			log.Printf("Using %d parallel fetchers", fetchWorkers)
 		}
 	}
 
@@ -177,12 +267,12 @@ func main() {
 	urlChan := make(chan string, len(urls))
 
 	// Start fetch workers
-	for i := 0; i < *fetchWorkers; i++ {
+	for i := 0; i < fetchWorkers; i++ {
 		fetchWg.Add(1)
 		go func(workerID int) {
 			defer fetchWg.Done()
 			for url := range urlChan {
-				if !*quiet {
+				if !quiet {
 					log.Printf("[Worker %d] Fetching %s", workerID, url)
 				}
 
@@ -190,10 +280,10 @@ func main() {
 				if err != nil {
 					// Check if it's a connection error and wait for internet
 					if strings.Contains(err.Error(), "dial") || strings.Contains(err.Error(), "connection") || strings.Contains(err.Error(), "network") {
-						if !*quiet {
+						if !quiet {
 							log.Printf("[Worker %d] Connection error detected, checking internet...", workerID)
 						}
-						if connErr := netutil.CheckConnectionWithRetry(ctx, *quiet); connErr != nil {
+						if connErr := netutil.CheckConnectionWithRetry(ctx, quiet); connErr != nil {
 							errMsg := fmt.Errorf("failed to fetch %s: %w (connection lost)", url, err)
 							errorChan <- errMsg
 							if tracker != nil {
@@ -202,7 +292,7 @@ func main() {
 							continue
 						}
 						// Connection restored, retry this URL
-						if !*quiet {
+						if !quiet {
 							log.Printf("[Worker %d] Connection restored, retrying %s", workerID, url)
 						}
 						domains, err = f.Fetch(ctx, url)
@@ -231,7 +321,7 @@ func main() {
 					tracker.RecordSuccess(url, len(domains))
 				}
 
-				if !*quiet {
+				if !quiet {
 					log.Printf("[Worker %d] Found %d domains from %s", workerID, len(domains), url)
 				}
 
@@ -280,7 +370,7 @@ func main() {
 
 	aggregationStats.DomainsFound = len(allDomains)
 
-	if !*quiet {
+	if !quiet {
 		log.Printf("Found %d unique domains (removed %d duplicates)", aggregationStats.DomainsFound, aggregationStats.DuplicatesFound)
 	}
 
@@ -291,28 +381,28 @@ func main() {
 	// Validate domains
 	validDomains := []string{}
 
-	if *enableDNS || *enableHTTP {
-		if !*quiet {
-			log.Printf("Validating %d domains with %d workers (caching: %v)...", aggregationStats.DomainsFound, *workers, *enableCache)
+	if enableDNS || enableHTTP {
+		if !quiet {
+			log.Printf("Validating %d domains with %d workers (caching: %v)...", aggregationStats.DomainsFound, workers, enableCache)
 		}
 
 		// Parse DNS resolvers
-		resolvers := strings.Split(*dnsResolvers, ",")
+		resolvers := strings.Split(dnsResolvers, ",")
 		for i, r := range resolvers {
 			resolvers[i] = strings.TrimSpace(r)
 		}
 
-		v := validator.NewValidatorWithResolvers(*enableCache, resolvers)
+		v := validator.NewValidatorWithResolvers(enableCache, resolvers)
 		validDomains = validateDomains(ctx, v, allDomains, aggregationStats)
 
-		if !*quiet {
+		if !quiet {
 			log.Printf("Validation complete: %d valid, %d invalid", aggregationStats.DomainsValid, aggregationStats.DomainsInvalid)
 		}
 
 		// Record validation stats
 		if tracker != nil {
 			validationMethod := "dns"
-			if *enableHTTP {
+			if enableHTTP {
 				validationMethod = "dns+http"
 			}
 			tracker.RecordOverallValidation(validationMethod, aggregationStats.DomainsValid, aggregationStats.DomainsInvalid)
@@ -332,7 +422,7 @@ func main() {
 	}
 
 	// Write output
-	if err := writeOutput(*outputFile, validDomains); err != nil {
+	if err := writeOutput(outputFile, validDomains); err != nil {
 		log.Fatalf("Failed to write output: %v", err)
 	}
 
@@ -340,8 +430,8 @@ func main() {
 	if tracker != nil {
 		if err := tracker.Save(); err != nil {
 			log.Printf("Warning: Failed to save stats: %v", err)
-		} else if !*quiet {
-			log.Printf("Stats saved to %s", filepath.Join(*dataDir, stats.StatsFile))
+		} else if !quiet {
+			log.Printf("Stats saved to %s", filepath.Join(dataDir, stats.StatsFile))
 		}
 	}
 
@@ -403,7 +493,7 @@ func validateDomains(ctx context.Context, v *validator.Validator, domains map[st
 	validDomains = make([]string, 0, total*4/5)
 
 	// Create buffered channel for better throughput
-	domainChan := make(chan string, *workers*2)
+	domainChan := make(chan string, workers*2)
 
 	// Check if running in TTY (interactive terminal)
 	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
@@ -412,7 +502,7 @@ func validateDomains(ctx context.Context, v *validator.Validator, domains map[st
 	var bar *progressbar.ProgressBar
 	startTime := time.Now()
 
-	if !*quiet && isTTY {
+	if !quiet && isTTY {
 		// Beautiful progress bar for interactive terminals
 		bar = progressbar.NewOptions(total,
 			progressbar.OptionSetDescription(color.CyanString("🔍 Validating")),
@@ -433,17 +523,17 @@ func validateDomains(ctx context.Context, v *validator.Validator, domains map[st
 				fmt.Fprintln(os.Stderr)
 			}),
 		)
-	} else if !*quiet {
+	} else if !quiet {
 		// Simple logging for non-TTY (pipes, files, cronjobs)
-		log.Printf("Starting validation of %d domains with %d workers...", total, *workers)
+		log.Printf("Starting validation of %d domains with %d workers...", total, workers)
 	}
 
 	// Start workers first
-	for i := 0; i < *workers; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			localValid := make([]string, 0, total/(*workers))
+			localValid := make([]string, 0, total/(workers))
 			localValidCount := 0
 			localInvalidCount := 0
 
@@ -451,9 +541,9 @@ func validateDomains(ctx context.Context, v *validator.Validator, domains map[st
 				valid := false
 				var err error
 
-				if *enableHTTP {
+				if enableHTTP {
 					valid, err = v.ValidateFull(ctx, domain)
-				} else if *enableDNS {
+				} else if enableDNS {
 					valid, err = v.ValidateDNS(ctx, domain)
 				}
 
@@ -469,7 +559,7 @@ func validateDomains(ctx context.Context, v *validator.Validator, domains map[st
 				// Update progress
 				current := processed.Add(1)
 
-				if !*quiet {
+				if !quiet {
 					if bar != nil {
 						// TTY: Update progress bar
 						bar.Add(1)
@@ -526,7 +616,7 @@ func writeOutput(path string, domains []string) error {
 }
 
 func printResults(aggStats *AggregationStats, validCount int) {
-	if *quiet {
+	if quiet {
 		return
 	}
 
@@ -569,7 +659,7 @@ func printResults(aggStats *AggregationStats, validCount int) {
 	cyan.Println(midLine)
 
 	// Validation statistics
-	if *enableDNS || *enableHTTP {
+	if enableDNS || enableHTTP {
 		cyan.Print("║  ")
 		white.Print("🔍 VALIDATION RESULTS")
 		fmt.Print(strings.Repeat(" ", 55))
@@ -608,7 +698,7 @@ func printResults(aggStats *AggregationStats, validCount int) {
 	cyan.Println("║")
 	cyan.Println("║" + strings.Repeat(" ", 78) + "║")
 
-	printColorLine(cyan, green, "    File:", *outputFile)
+	printColorLine(cyan, green, "    File:", outputFile)
 	printColorLine(cyan, green, "    Total domains:", formatSize(validCount))
 
 	// Error summary
