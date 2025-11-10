@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,16 +20,23 @@ type dnsResult struct {
 
 // Validator validates domains via DNS and HTTP
 type Validator struct {
-	resolver   *net.Resolver
+	resolvers  []*net.Resolver
 	httpClient *http.Client
 	cache      map[string]*dnsResult
 	cacheMu    sync.RWMutex
 	cacheTTL   time.Duration
 	useCache   bool
+	nextResolver uint32  // atomic counter for round-robin
 }
 
-// NewValidator creates a new validator with optional caching
+// NewValidator creates a new validator with system DNS resolver and optional caching
 func NewValidator(enableCache bool) *Validator {
+	// Use system DNS resolver by default
+	return NewValidatorWithResolvers(enableCache, []string{})
+}
+
+// NewValidatorWithResolvers creates a new validator with custom DNS resolvers
+func NewValidatorWithResolvers(enableCache bool, dnsServers []string) *Validator {
 	// Optimize HTTP transport for high concurrency
 	transport := &http.Transport{
 		MaxIdleConns:        1000,              // Increased from default 100
@@ -49,31 +58,70 @@ func NewValidator(enableCache bool) *Validator {
 		}).DialContext,
 	}
 
-	return &Validator{
-		resolver: &net.Resolver{
-			PreferGo: true,
-			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				d := net.Dialer{
-					Timeout:   3 * time.Second,    // Reduced from 5s
-					KeepAlive: 30 * time.Second,
-				}
-				return d.DialContext(ctx, network, address)
+	// Create multiple resolvers (one per DNS server)
+	var resolvers []*net.Resolver
+
+	if len(dnsServers) == 0 {
+		// Use system DNS resolver
+		resolvers = []*net.Resolver{
+			{
+				PreferGo: true,
+				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					d := net.Dialer{
+						Timeout:   3 * time.Second,
+						KeepAlive: 30 * time.Second,
+					}
+					return d.DialContext(ctx, network, address)
+				},
 			},
-		},
+		}
+	} else {
+		// Create a resolver for each DNS server
+		for _, server := range dnsServers {
+			if server == "" {
+				continue
+			}
+			serverAddr := server
+			resolvers = append(resolvers, &net.Resolver{
+				PreferGo: true,
+				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					d := net.Dialer{
+						Timeout:   3 * time.Second,
+						KeepAlive: 30 * time.Second,
+					}
+					// Use the custom DNS server
+					return d.DialContext(ctx, "udp", serverAddr)
+				},
+			})
+		}
+	}
+
+	return &Validator{
+		resolvers: resolvers,
 		httpClient: &http.Client{
-			Timeout:   8 * time.Second,            // Reduced from 10s
+			Timeout:   8 * time.Second,
 			Transport: transport,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {                 // Reduced from 10
+				if len(via) >= 5 {
 					return fmt.Errorf("too many redirects")
 				}
 				return nil
 			},
 		},
-		cache:    make(map[string]*dnsResult, 100000),  // Pre-allocate for 100k domains
+		cache:    make(map[string]*dnsResult, 100000),
 		cacheTTL: 5 * time.Minute,
 		useCache: enableCache,
+		nextResolver: 0,
 	}
+}
+
+// getResolver returns a resolver using round-robin selection
+func (v *Validator) getResolver() *net.Resolver {
+	if len(v.resolvers) == 1 {
+		return v.resolvers[0]
+	}
+	idx := atomic.AddUint32(&v.nextResolver, 1) % uint32(len(v.resolvers))
+	return v.resolvers[idx]
 }
 
 // ValidateDNS checks if domain has A, AAAA, or CNAME records (with caching and parallel lookups)
@@ -91,42 +139,47 @@ func (v *Validator) ValidateDNS(ctx context.Context, domain string) (bool, error
 		v.cacheMu.RUnlock()
 	}
 
-	// Perform parallel DNS lookups for A, AAAA, and CNAME
+	// Get a resolver in round-robin fashion
+	resolver := v.getResolver()
+
+	// Parallel DNS lookup with early exit - check all record types simultaneously
+	// This is MUCH faster than sequential lookups (0.5s vs 3s for invalid domains)
+	lookupCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
 	type lookupResult struct {
-		hasRecord bool
-		err       error
+		valid bool
+		err   error
 	}
 
 	results := make(chan lookupResult, 3)
-	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
 
-	// Check A records (IPv4)
+	// Check A record (IPv4) in parallel
 	go func() {
-		ips, err := v.resolver.LookupIP(lookupCtx, "ip4", domain)
-		results <- lookupResult{hasRecord: err == nil && len(ips) > 0, err: err}
+		ips, err := resolver.LookupIP(lookupCtx, "ip4", domain)
+		results <- lookupResult{valid: err == nil && len(ips) > 0, err: err}
 	}()
 
-	// Check AAAA records (IPv6)
+	// Check AAAA record (IPv6) in parallel
 	go func() {
-		ips, err := v.resolver.LookupIP(lookupCtx, "ip6", domain)
-		results <- lookupResult{hasRecord: err == nil && len(ips) > 0, err: err}
+		ips, err := resolver.LookupIP(lookupCtx, "ip6", domain)
+		results <- lookupResult{valid: err == nil && len(ips) > 0, err: err}
 	}()
 
-	// Check CNAME records
+	// Check CNAME record in parallel
 	go func() {
-		cname, err := v.resolver.LookupCNAME(lookupCtx, domain)
-		hasRecord := err == nil && cname != "" && cname != domain && cname != domain+"."
-		results <- lookupResult{hasRecord: hasRecord, err: err}
+		cname, err := resolver.LookupCNAME(lookupCtx, domain)
+		valid := err == nil && cname != "" && cname != domain && cname != domain+"."
+		results <- lookupResult{valid: valid, err: err}
 	}()
 
-	// Wait for any successful result
+	// Wait for results - early exit on first success
 	valid := false
 	for i := 0; i < 3; i++ {
 		result := <-results
-		if result.hasRecord {
+		if result.valid {
 			valid = true
-			break // Exit early on first success
+			break // Early exit - no need to wait for other lookups
 		}
 	}
 
@@ -154,6 +207,15 @@ func (v *Validator) ValidateHTTP(ctx context.Context, domain string) (bool, erro
 	httpCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
+	// Helper to properly drain and close response body
+	drainAndClose := func(resp *http.Response) {
+		if resp != nil && resp.Body != nil {
+			// Drain up to 512 bytes to allow connection reuse
+			io.CopyN(io.Discard, resp.Body, 512)
+			resp.Body.Close()
+		}
+	}
+
 	// Try HTTPS
 	go func() {
 		req, err := http.NewRequestWithContext(httpCtx, "HEAD", "https://"+domain, nil)
@@ -162,11 +224,13 @@ func (v *Validator) ValidateHTTP(ctx context.Context, domain string) (bool, erro
 			return
 		}
 		req.Header.Set("User-Agent", "Magpie/1.0")
+		req.Close = true // Close connection after request to avoid connection pool issues
 
 		resp, err := v.httpClient.Do(req)
 		if err == nil {
-			resp.Body.Close()
-			results <- httpResult{valid: resp.StatusCode < 500, err: nil}
+			valid := resp.StatusCode < 500
+			drainAndClose(resp)
+			results <- httpResult{valid: valid, err: nil}
 		} else {
 			results <- httpResult{valid: false, err: err}
 		}
@@ -180,11 +244,13 @@ func (v *Validator) ValidateHTTP(ctx context.Context, domain string) (bool, erro
 			return
 		}
 		req.Header.Set("User-Agent", "Magpie/1.0")
+		req.Close = true // Close connection after request to avoid connection pool issues
 
 		resp, err := v.httpClient.Do(req)
 		if err == nil {
-			resp.Body.Close()
-			results <- httpResult{valid: resp.StatusCode < 500, err: nil}
+			valid := resp.StatusCode < 500
+			drainAndClose(resp)
+			results <- httpResult{valid: valid, err: nil}
 		} else {
 			results <- httpResult{valid: false, err: err}
 		}

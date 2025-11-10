@@ -118,7 +118,8 @@ func (f *Fetcher) fetchAttempt(ctx context.Context, url string) ([]string, error
 
 	req.Header.Set("User-Agent", "Magpie/1.0")
 	req.Header.Set("Accept", "text/plain, */*")
-	req.Header.Set("Accept-Encoding", "gzip, deflate")  // Enable compression
+	// Note: Don't manually set Accept-Encoding - let Go's HTTP client handle it automatically
+	// The transport's DisableCompression: false already enables compression
 
 	resp, err := f.client.Do(req)
 	if err != nil {
