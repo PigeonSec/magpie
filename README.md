@@ -299,20 +299,7 @@ Contributions are welcome! Please submit a Pull Request.
 ---
 
 <!-- BEGIN_STATS -->
-<!-- Stats will be automatically updated by GitHub Actions -->
-<!-- END_STATS -->
 
----
-
-## License
-
-This project is licensed under the same license as the [Kestrel](https://github.com/pigeonsec/kestrel) project.
-
----
-
-<div align="center">
-  Made with ❤️ by [PigeonSec](https://github.com/pigeonsec)
-</div>
 ## 📊 Blocklist Statistics
 
 | URL | Domains | Status | Success | Failures | Last Checked |
@@ -326,3 +313,17 @@ This project is licensed under the same license as the [Kestrel](https://github.
 **Summary:** 5 total URLs | 5 active | 0 filtered | ~117.6K total domains
 
 *Last updated: 2025-11-10 21:23 UTC*
+
+<!-- END_STATS -->
+
+---
+
+## License
+
+This project is licensed under the same license as the [Kestrel](https://github.com/pigeonsec/kestrel) project.
+
+---
+
+<div align="center">
+  Made with ❤️ by [PigeonSec](https://github.com/pigeonsec)
+</div>
