@@ -7,7 +7,7 @@
 
   [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
   [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-  [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-success.svg)](go.mod)
+  [![Minimal Dependencies](https://img.shields.io/badge/dependencies-2-success.svg)](go.mod)
 
 </div>
 
@@ -15,7 +15,7 @@
 
 ## Overview
 
-Magpie is a high-performance blocklist aggregator that fetches, validates, and combines domain blocklists from multiple sources. Built in pure Go with zero external dependencies, it's optimized for speed and reliability.
+Magpie is a high-performance blocklist aggregator that fetches, validates, and combines domain blocklists from multiple sources. Built in pure Go with minimal dependencies (color output and progress bars), it's optimized for speed and reliability.
 
 **Key Features:**
 - 🚀 **Parallel fetching** with 6 DNS resolvers (bypasses Pi-hole)
