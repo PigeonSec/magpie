@@ -296,6 +296,14 @@ Compatible with:
 
 Contributions are welcome! Please submit a Pull Request.
 
+---
+
+<!-- BEGIN_STATS -->
+<!-- Stats will be automatically updated by GitHub Actions -->
+<!-- END_STATS -->
+
+---
+
 ## License
 
 This project is licensed under the same license as the [Kestrel](https://github.com/pigeonsec/kestrel) project.

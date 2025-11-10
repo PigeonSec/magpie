@@ -43,9 +43,11 @@ jobs:
           with open('data/stats.json', 'r') as f:
               stats = json.load(f)
 
-          # Generate markdown table
+          # Generate markdown table with proper newlines
           table = []
-          table.append("## 📊 Blocklist Statistics\n")
+          table.append("")  # Empty line before heading
+          table.append("## 📊 Blocklist Statistics")
+          table.append("")  # Empty line after heading
           table.append("| URL | Domains | Status | Success | Failures | Last Checked |")
           table.append("|-----|---------|--------|---------|----------|--------------|")
 
@@ -76,22 +78,13 @@ jobs:
               # Success/failures
               success = data.get('success_count', 0)
 
-              # Last checked
+              # Last checked - show actual timestamp
               last_checked = data.get('last_checked', '')
               if last_checked:
                   try:
                       dt = datetime.fromisoformat(last_checked.replace('Z', '+00:00'))
-                      now = datetime.now(timezone.utc)
-                      delta = now - dt
-
-                      if delta.days > 0:
-                          last_str = f"{delta.days}d ago"
-                      elif delta.seconds >= 3600:
-                          last_str = f"{delta.seconds // 3600}h ago"
-                      elif delta.seconds >= 60:
-                          last_str = f"{delta.seconds // 60}m ago"
-                      else:
-                          last_str = "just now"
+                      # Format: 2025-01-10 14:23
+                      last_str = dt.strftime('%Y-%m-%d %H:%M')
                   except:
                       last_str = "unknown"
               else:
@@ -114,7 +107,10 @@ jobs:
 
           table.append("")
           table.append(f"**Summary:** {total_urls} total URLs | {active} active | {filtered} filtered | ~{total_str} total domains")
-          table.append(f"\n*Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}*\n")
+          table.append("")
+          table.append(f"*Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}*")
+          table.append("")
+          table.append("<!-- END_STATS -->")
 
           # Write to file
           with open('stats_table.md', 'w') as f:
@@ -126,14 +122,33 @@ jobs:
       - name: Update README
         if: steps.check_stats.outputs.exists == 'true'
         run: |
-          # Check if stats section exists in README
-          if grep -q "## 📊 Blocklist Statistics" README.md; then
-            # Remove old stats section
-            sed -i '/## 📊 Blocklist Statistics/,/^\*Last updated:/d' README.md
+          # Check if stats markers exist in README
+          if grep -q "<!-- BEGIN_STATS -->" README.md && grep -q "<!-- END_STATS -->" README.md; then
+            # Replace content between markers
+            echo "Found stats markers, replacing content..."
+            awk '
+              /<!-- BEGIN_STATS -->/ {
+                print;
+                system("cat stats_table.md");
+                skip=1;
+                next
+              }
+              /<!-- END_STATS -->/ {
+                skip=0;
+                next
+              }
+              !skip
+            ' README.md > README.tmp && mv README.tmp README.md
+          elif grep -q "## 📊 Blocklist Statistics" README.md; then
+            # Remove old stats section and append new one
+            echo "Found old stats section, replacing..."
+            sed -i '/## 📊 Blocklist Statistics/,/<!-- END_STATS -->/d' README.md
+            cat stats_table.md >> README.md
+          else
+            # No stats section exists, append to end
+            echo "No stats section found, appending..."
+            cat stats_table.md >> README.md
           fi
-
-          # Append new stats to end of README
-          cat stats_table.md >> README.md
 
           echo "✅ README updated with latest stats"
 
