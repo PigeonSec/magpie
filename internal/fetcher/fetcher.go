@@ -4,10 +4,26 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"math/rand"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
+
+const (
+	// Domain validation constants
+	maxDomainLength = 253 // RFC 1035
+	maxLabelLength  = 63  // RFC 1035
+	minDomainLength = 3   // e.g., "a.b"
+
+	// Scanner buffer size for large files
+	maxScannerBuffer = 1024 * 1024 // 1MB
+)
+
+// Domain validation regex - matches valid domain names
+var domainRegex = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$`)
 
 // Fetcher fetches and parses blocklists from URLs
 type Fetcher struct {
@@ -38,7 +54,7 @@ func NewFetcher(timeout time.Duration, retryAttempts int) *Fetcher {
 	}
 }
 
-// Fetch downloads and parses domains from a URL
+// Fetch downloads and parses domains from a URL with exponential backoff
 func (f *Fetcher) Fetch(ctx context.Context, url string) ([]string, error) {
 	var lastErr error
 
@@ -47,53 +63,97 @@ func (f *Fetcher) Fetch(ctx context.Context, url string) ([]string, error) {
 		if err == nil {
 			return domains, nil
 		}
+
 		lastErr = err
+
+		// Don't sleep on last attempt
 		if attempt < f.retryAttempts {
-			time.Sleep(time.Second * time.Duration(attempt))
+			// Exponential backoff: 1s, 2s, 4s, 8s, etc.
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+
+			// Add jitter (0-50% of backoff time)
+			jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+			sleepTime := backoff + jitter
+
+			// Cap at 30 seconds
+			if sleepTime > 30*time.Second {
+				sleepTime = 30 * time.Second
+			}
+
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(sleepTime):
+				// Continue to next attempt
+			}
 		}
 	}
 
-	return nil, lastErr
+	return nil, fmt.Errorf("failed after %d attempts: %w", f.retryAttempts, lastErr)
 }
 
 func (f *Fetcher) fetchAttempt(ctx context.Context, url string) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "Kestrel-Aggregator/1.0")
+	req.Header.Set("User-Agent", "Magpie/1.0")
+	req.Header.Set("Accept", "text/plain, */*")
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to fetch URL: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 	}
 
-	var domains []string
+	// Use map for deduplication during parsing
+	domainMap := make(map[string]bool)
 	scanner := bufio.NewScanner(resp.Body)
 
+	// Increase buffer size for large lines
+	buf := make([]byte, maxScannerBuffer)
+	scanner.Buffer(buf, maxScannerBuffer)
+
+	lineNum := 0
 	for scanner.Scan() {
+		lineNum++
+
+		// Check context cancellation periodically
+		if lineNum%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+		}
+
 		line := strings.TrimSpace(scanner.Text())
 
 		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") || strings.HasPrefix(line, ";") {
 			continue
 		}
 
 		// Parse domain from line
 		domain := ParseDomain(line)
-		if domain != "" {
-			domains = append(domains, domain)
+		if domain != "" && IsValidDomain(domain) {
+			domainMap[domain] = true
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error reading response (line %d): %w", lineNum, err)
+	}
+
+	// Convert map to slice
+	domains := make([]string, 0, len(domainMap))
+	for domain := range domainMap {
+		domains = append(domains, domain)
 	}
 
 	return domains, nil
@@ -105,43 +165,177 @@ func ParseDomain(line string) string {
 	if idx := strings.Index(line, "#"); idx != -1 {
 		line = line[:idx]
 	}
+	if idx := strings.Index(line, ";"); idx != -1 {
+		line = line[:idx]
+	}
 
 	line = strings.TrimSpace(line)
-
-	// Handle hosts file format: "0.0.0.0 domain.com" or "127.0.0.1 domain.com"
-	if strings.HasPrefix(line, "0.0.0.0 ") {
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			return parts[1]
-		}
-	}
-	if strings.HasPrefix(line, "127.0.0.1 ") {
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			return parts[1]
-		}
+	if line == "" {
+		return ""
 	}
 
-	// Handle generic IP + domain format
+	// Handle AdBlock/uBlock format: ||domain.com^ or ||domain.com^$third-party
+	if strings.HasPrefix(line, "||") {
+		line = strings.TrimPrefix(line, "||")
+		if idx := strings.Index(line, "^"); idx != -1 {
+			line = line[:idx]
+		}
+		return cleanDomain(line)
+	}
+
+	// Handle AdBlock exceptions: @@||domain.com^
+	if strings.HasPrefix(line, "@@||") {
+		return "" // Skip exceptions
+	}
+
+	// Handle IPv4 hosts file format: "0.0.0.0 domain.com" or "127.0.0.1 domain.com"
+	if strings.HasPrefix(line, "0.0.0.0 ") || strings.HasPrefix(line, "127.0.0.1 ") {
+		parts := strings.Fields(line)
+		if len(parts) >= 2 {
+			return cleanDomain(parts[1])
+		}
+	}
+
+	// Handle IPv6 hosts file format: "::1 domain.com" or ":: domain.com"
+	if strings.HasPrefix(line, "::") || strings.HasPrefix(line, "::1") {
+		parts := strings.Fields(line)
+		if len(parts) >= 2 {
+			return cleanDomain(parts[1])
+		}
+	}
+
+	// Handle generic IP + domain format (IPv4 or IPv6)
 	if strings.Contains(line, " ") {
 		parts := strings.Fields(line)
 		if len(parts) >= 2 {
-			// Check if first part looks like an IP
-			if strings.Contains(parts[0], ".") && len(strings.Split(parts[0], ".")) == 4 {
-				return parts[1]
+			firstPart := parts[0]
+			// Check if first part looks like an IPv4 address
+			if strings.Count(firstPart, ".") == 3 {
+				return cleanDomain(parts[1])
+			}
+			// Check if first part looks like an IPv6 address
+			if strings.Contains(firstPart, ":") {
+				return cleanDomain(parts[1])
 			}
 		}
 	}
 
-	// Plain domain format
-	domain := strings.TrimSpace(line)
-
-	// Basic validation - must contain a dot and no spaces
-	if strings.Contains(domain, ".") && !strings.Contains(domain, " ") {
-		// Remove trailing dot if present
-		domain = strings.TrimSuffix(domain, ".")
-		return domain
+	// Handle URL format: extract domain from URL
+	if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
+		if parsed, err := url.Parse(line); err == nil && parsed.Host != "" {
+			// Remove port if present
+			host := parsed.Host
+			if idx := strings.Index(host, ":"); idx != -1 {
+				host = host[:idx]
+			}
+			return cleanDomain(host)
+		}
 	}
 
-	return ""
+	// Plain domain format
+	return cleanDomain(line)
+}
+
+// cleanDomain cleans and normalizes a domain string
+func cleanDomain(domain string) string {
+	domain = strings.TrimSpace(domain)
+	domain = strings.ToLower(domain)
+
+	// Remove protocol prefixes if present
+	domain = strings.TrimPrefix(domain, "http://")
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.TrimPrefix(domain, "www.")
+
+	// Remove trailing dot (FQDN format)
+	domain = strings.TrimSuffix(domain, ".")
+
+	// Remove path and query string if present
+	if idx := strings.Index(domain, "/"); idx != -1 {
+		domain = domain[:idx]
+	}
+	if idx := strings.Index(domain, "?"); idx != -1 {
+		domain = domain[:idx]
+	}
+
+	// Remove port if present
+	if idx := strings.Index(domain, ":"); idx != -1 {
+		domain = domain[:idx]
+	}
+
+	// Handle wildcard domains - remove leading *. or *.
+	domain = strings.TrimPrefix(domain, "*.")
+	domain = strings.TrimPrefix(domain, ".")
+
+	domain = strings.TrimSpace(domain)
+
+	// Must contain at least one dot and be non-empty
+	if domain == "" || !strings.Contains(domain, ".") {
+		return ""
+	}
+
+	return domain
+}
+
+// IsValidDomain validates a domain name according to RFC standards
+func IsValidDomain(domain string) bool {
+	if domain == "" {
+		return false
+	}
+
+	// Check length constraints
+	if len(domain) < minDomainLength || len(domain) > maxDomainLength {
+		return false
+	}
+
+	// Domain must contain at least one dot
+	if !strings.Contains(domain, ".") {
+		return false
+	}
+
+	// Check for invalid characters
+	if strings.Contains(domain, " ") || strings.Contains(domain, "\t") {
+		return false
+	}
+
+	// Domain cannot start or end with a hyphen or dot
+	if strings.HasPrefix(domain, "-") || strings.HasSuffix(domain, "-") ||
+		strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+
+	// Validate each label
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
+		return false
+	}
+
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > maxLabelLength {
+			return false
+		}
+
+		// Label cannot start or end with hyphen
+		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+
+		// Check for valid characters in label
+		for _, char := range label {
+			if !((char >= 'a' && char <= 'z') ||
+				(char >= 'A' && char <= 'Z') ||
+				(char >= '0' && char <= '9') ||
+				char == '-') {
+				return false
+			}
+		}
+	}
+
+	// TLD validation - last label should be at least 2 characters and alphabetic
+	tld := labels[len(labels)-1]
+	if len(tld) < 2 {
+		return false
+	}
+
+	// Use regex for final validation
+	return domainRegex.MatchString(domain)
 }
