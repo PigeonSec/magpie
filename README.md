@@ -304,15 +304,15 @@ Contributions are welcome! Please submit a Pull Request.
 
 | URL | Domains | Status | Success | Failures | Last Checked |
 |-----|---------|--------|---------|----------|--------------|
-| https://raw.githubusercontent.com/RooneyMcNibNu... | 67.2K | ✅ Active | 1 | 0 | 1m ago |
-| https://raw.githubusercontent.com/PolishFilters... | 39.3K | ✅ Active | 1 | 0 | 1m ago |
-| https://winhelp2002.mvps.org/hosts.txt | 8.6K | ✅ Active | 1 | 0 | 1m ago |
-| https://v.firebog.net/hosts/neohostsbasic.txt | 2.4K | ✅ Active | 1 | 0 | 1m ago |
-| https://raw.githubusercontent.com/FadeMind/host... | 31 | ✅ Active | 1 | 0 | 1m ago |
+| https://raw.githubusercontent.com/RooneyMcNibNu... | 67.2K | ✅ Active | 1 | 0 | 2025-11-10 22:22 |
+| https://raw.githubusercontent.com/PolishFilters... | 39.3K | ✅ Active | 1 | 0 | 2025-11-10 22:22 |
+| https://winhelp2002.mvps.org/hosts.txt | 8.6K | ✅ Active | 1 | 0 | 2025-11-10 22:22 |
+| https://v.firebog.net/hosts/neohostsbasic.txt | 2.4K | ✅ Active | 1 | 0 | 2025-11-10 22:22 |
+| https://raw.githubusercontent.com/FadeMind/host... | 31 | ✅ Active | 1 | 0 | 2025-11-10 22:22 |
 
 **Summary:** 5 total URLs | 5 active | 0 filtered | ~117.6K total domains
 
-*Last updated: 2025-11-10 21:23 UTC*
+*Last updated: 2025-11-10 21:32 UTC*
 
 <!-- END_STATS -->
 
