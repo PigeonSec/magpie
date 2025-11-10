@@ -31,7 +31,7 @@ type Fetcher struct {
 	retryAttempts int
 }
 
-// NewFetcher creates a new fetcher
+// NewFetcher creates a new fetcher with optimized connection pooling
 func NewFetcher(timeout time.Duration, retryAttempts int) *Fetcher {
 	if timeout == 0 {
 		timeout = 30 * time.Second
@@ -40,9 +40,27 @@ func NewFetcher(timeout time.Duration, retryAttempts int) *Fetcher {
 		retryAttempts = 3
 	}
 
+	// Optimize HTTP transport for fetching large blocklists
+	transport := &http.Transport{
+		MaxIdleConns:          500,                // High concurrent fetches
+		MaxIdleConnsPerHost:   50,                 // Multiple connections per host
+		MaxConnsPerHost:       50,                 // Limit per host
+		IdleConnTimeout:       90 * time.Second,   // Keep alive longer
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,   // Wait for headers
+		DisableCompression:    false,              // Enable compression for large files
+		DisableKeepAlives:     false,              // Reuse connections
+		ForceAttemptHTTP2:     true,               // HTTP/2 for better performance
+		// Optimize read buffer
+		ReadBufferSize:  64 * 1024,                // 64KB read buffer
+		WriteBufferSize: 64 * 1024,                // 64KB write buffer
+	}
+
 	return &Fetcher{
 		client: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
 					return fmt.Errorf("too many redirects")
@@ -100,6 +118,7 @@ func (f *Fetcher) fetchAttempt(ctx context.Context, url string) ([]string, error
 
 	req.Header.Set("User-Agent", "Magpie/1.0")
 	req.Header.Set("Accept", "text/plain, */*")
+	req.Header.Set("Accept-Encoding", "gzip, deflate")  // Enable compression
 
 	resp, err := f.client.Do(req)
 	if err != nil {
@@ -112,7 +131,8 @@ func (f *Fetcher) fetchAttempt(ctx context.Context, url string) ([]string, error
 	}
 
 	// Use map for deduplication during parsing
-	domainMap := make(map[string]bool)
+	// Pre-allocate for typical blocklist sizes (10k-100k domains)
+	domainMap := make(map[string]bool, 50000)
 	scanner := bufio.NewScanner(resp.Body)
 
 	// Increase buffer size for large lines

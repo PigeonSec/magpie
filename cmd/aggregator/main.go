@@ -31,6 +31,10 @@ var (
 	enableHTTP = flag.Bool("http", false, "Enable HTTP validation (in addition to DNS)")
 	workers    = flag.Int("workers", 10, "Number of concurrent validation workers")
 
+	// Performance
+	fetchWorkers = flag.Int("fetch-workers", 5, "Number of concurrent URL fetchers")
+	enableCache  = flag.Bool("cache", true, "Enable DNS result caching")
+
 	// Options
 	quiet   = flag.Bool("quiet", false, "Quiet mode - minimal output")
 	showVer = flag.Bool("version", false, "Show version information")
@@ -72,42 +76,86 @@ func main() {
 
 	if !*quiet {
 		log.Printf("Loaded %d source URLs", len(urls))
+		log.Printf("Using %d parallel fetchers", *fetchWorkers)
 	}
 
-	// Fetch domains
+	// Fetch domains with parallel workers and streaming
 	stats := &Stats{}
 	allDomains := make(map[string]bool)
+	domainChan := make(chan string, 10000) // Buffered channel for streaming
+	errorChan := make(chan error, len(urls))
 
 	f := fetcher.NewFetcher(30*time.Second, 3)
 	ctx := context.Background()
 
-	for i, url := range urls {
-		if !*quiet {
-			log.Printf("[%d/%d] Fetching %s", i+1, len(urls), url)
+	// Start parallel fetchers
+	var fetchWg sync.WaitGroup
+	urlChan := make(chan string, len(urls))
+
+	// Start fetch workers
+	for i := 0; i < *fetchWorkers; i++ {
+		fetchWg.Add(1)
+		go func(workerID int) {
+			defer fetchWg.Done()
+			for url := range urlChan {
+				if !*quiet {
+					log.Printf("[Worker %d] Fetching %s", workerID, url)
+				}
+
+				domains, err := f.Fetch(ctx, url)
+				if err != nil {
+					errMsg := fmt.Errorf("failed to fetch %s: %w", url, err)
+					errorChan <- errMsg
+					continue
+				}
+
+				stats.URLsFetched++
+
+				if !*quiet {
+					log.Printf("[Worker %d] Found %d domains from %s", workerID, len(domains), url)
+				}
+
+				// Stream domains to channel
+				for _, domain := range domains {
+					domainChan <- domain
+				}
+			}
+		}(i)
+	}
+
+	// Feed URLs to workers
+	go func() {
+		for _, url := range urls {
+			urlChan <- url
 		}
+		close(urlChan)
+	}()
 
-		domains, err := f.Fetch(ctx, url)
-		if err != nil {
-			errMsg := fmt.Sprintf("Failed to fetch %s: %v", url, err)
-			log.Printf("ERROR: %s", errMsg)
-			stats.Errors = append(stats.Errors, errMsg)
-			continue
-		}
-
-		stats.URLsFetched++
-
-		if !*quiet {
-			log.Printf("  Found %d domains", len(domains))
-		}
-
-		// Deduplicate
-		for _, domain := range domains {
+	// Collect domains in background
+	collectorDone := make(chan bool)
+	go func() {
+		for domain := range domainChan {
 			if allDomains[domain] {
 				stats.DuplicatesFound++
 			} else {
 				allDomains[domain] = true
 			}
 		}
+		collectorDone <- true
+	}()
+
+	// Wait for all fetchers to complete
+	fetchWg.Wait()
+	close(domainChan)
+
+	// Wait for collector to finish
+	<-collectorDone
+	close(errorChan)
+
+	// Collect errors
+	for err := range errorChan {
+		log.Printf("ERROR: %s", err)
+		stats.Errors = append(stats.Errors, err.Error())
 	}
 
 	stats.DomainsFound = len(allDomains)
@@ -125,10 +173,10 @@ func main() {
 
 	if *enableDNS || *enableHTTP {
 		if !*quiet {
-			log.Printf("Validating %d domains with %d workers...", stats.DomainsFound, *workers)
+			log.Printf("Validating %d domains with %d workers (caching: %v)...", stats.DomainsFound, *workers, *enableCache)
 		}
 
-		v := validator.NewValidator()
+		v := validator.NewValidator(*enableCache)
 		validDomains = validateDomains(ctx, v, allDomains, stats)
 
 		if !*quiet {
@@ -136,6 +184,7 @@ func main() {
 		}
 	} else {
 		// No validation - all domains are valid
+		validDomains = make([]string, 0, len(allDomains))
 		for domain := range allDomains {
 			validDomains = append(validDomains, domain)
 		}
@@ -195,20 +244,25 @@ func validateDomains(ctx context.Context, v *validator.Validator, domains map[st
 		wg           sync.WaitGroup
 		validMu      sync.Mutex
 		validDomains []string
+		processed    int
+		total        = len(domains)
 	)
 
-	// Create channel
-	domainChan := make(chan string, len(domains))
-	for domain := range domains {
-		domainChan <- domain
-	}
-	close(domainChan)
+	// Pre-allocate with estimated capacity (assume ~80% valid)
+	validDomains = make([]string, 0, total*4/5)
 
-	// Start workers
+	// Create buffered channel for better throughput
+	domainChan := make(chan string, *workers*2)
+
+	// Start workers first
 	for i := 0; i < *workers; i++ {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
+			localValid := make([]string, 0, total/(*workers))
+			localValidCount := 0
+			localInvalidCount := 0
+
 			for domain := range domainChan {
 				valid := false
 				var err error
@@ -220,18 +274,37 @@ func validateDomains(ctx context.Context, v *validator.Validator, domains map[st
 				}
 
 				if err == nil && valid {
-					validMu.Lock()
-					validDomains = append(validDomains, domain)
-					stats.DomainsValid++
-					validMu.Unlock()
+					localValid = append(localValid, domain)
+					localValidCount++
 				} else {
+					localInvalidCount++
+				}
+
+				// Progress reporting (every 1000 domains)
+				if !*quiet && (localValidCount+localInvalidCount)%1000 == 0 {
 					validMu.Lock()
-					stats.DomainsInvalid++
+					processed += 1000
+					pct := float64(processed) / float64(total) * 100
+					log.Printf("Progress: %d/%d (%.1f%%) - %d valid, %d invalid",
+						processed, total, pct, stats.DomainsValid+localValidCount, stats.DomainsInvalid+localInvalidCount)
 					validMu.Unlock()
 				}
 			}
-		}()
+
+			// Merge local results
+			validMu.Lock()
+			validDomains = append(validDomains, localValid...)
+			stats.DomainsValid += localValidCount
+			stats.DomainsInvalid += localInvalidCount
+			validMu.Unlock()
+		}(i)
 	}
+
+	// Feed domains to workers
+	for domain := range domains {
+		domainChan <- domain
+	}
+	close(domainChan)
 
 	wg.Wait()
 	return validDomains
@@ -244,7 +317,8 @@ func writeOutput(path string, domains []string) error {
 	}
 	defer file.Close()
 
-	writer := bufio.NewWriter(file)
+	// Use larger buffer for better write performance with large lists
+	writer := bufio.NewWriterSize(file, 256*1024) // 256KB buffer
 	for _, domain := range domains {
 		fmt.Fprintln(writer, domain)
 	}
