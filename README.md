@@ -15,14 +15,20 @@
 
 ## Overview
 
-Magpie is a high-performance blocklist aggregator that fetches, validates, and combines domain blocklists from multiple sources. Built in pure Go with minimal dependencies (color output and progress bars), it's optimized for speed and reliability.
+Magpie is a high-performance blocklist aggregator that fetches, validates, and combines domain blocklists from multiple sources. Built in pure Go with a beautiful terminal UI powered by Bubble Tea, it's optimized for speed, reliability, and user experience.
+
+<div align="center">
+  <img src="docs/tui.png" alt="Magpie TUI" width="800"/>
+</div>
 
 **Key Features:**
+- 🎨 **Beautiful TUI** colorful terminal interface with real-time progress
 - 🚀 **Parallel fetching** with 6 DNS resolvers (bypasses Pi-hole)
 - 🎯 **Smart filtering** auto-blacklists failing URLs after 3 attempts
 - 📊 **Stats tracking** persistent health monitoring in `data/stats.json`
 - ⚡ **High performance** 100 workers, DNS caching, connection pooling
 - 🔧 **Format support** hosts files, plain lists, AdBlock, URLs, wildcards
+- 🤖 **Cronjob ready** silent mode for automated scheduled runs
 
 ## Installation
 
@@ -90,6 +96,7 @@ EOF
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `-quiet` | `-q` | `false` | Quiet mode - minimal output |
+| `--silent` | - | `false` | Silent mode - no output (perfect for cronjobs) |
 | `-version` | `-v` | `false` | Show version information |
 | `--stats` | - | `false` | Display stats table and exit |
 | `--help` | `-h` | `false` | Show help message |
@@ -257,6 +264,81 @@ Magpie uses 6 public DNS resolvers in round-robin to bypass Pi-hole and ensure a
 ### Quiet Mode (for Scripts)
 ```bash
 ./magpie -s sources.txt -o blocklist.txt -q
+```
+
+### Silent Mode (for Cronjobs)
+```bash
+# Perfect for automated runs - zero output
+./magpie -s sources.txt -o blocklist.txt --silent
+```
+
+## Automated Cronjob Setup
+
+Magpie is perfect for running on a schedule to keep your blocklists up to date. The `--silent` flag ensures zero output, making it ideal for cronjobs.
+
+### Daily Blocklist Updates
+
+```bash
+# Add to crontab (crontab -e)
+# Run every day at 3 AM
+0 3 * * * /usr/local/bin/magpie -s /path/to/sources.txt -o /path/to/blocklist.txt --silent
+
+# Run every 12 hours
+0 */12 * * * /usr/local/bin/magpie -s /path/to/sources.txt -o /path/to/blocklist.txt --silent
+
+# Run weekly on Sunday at 2 AM
+0 2 * * 0 /usr/local/bin/magpie -s /path/to/sources.txt -o /path/to/blocklist.txt --silent
+```
+
+### Publishing to GitHub
+
+Automatically commit and push updated blocklists to a GitHub repository:
+
+```bash
+#!/bin/bash
+# save as: update-blocklists.sh
+
+REPO_DIR="/path/to/your/blocklist-repo"
+SOURCES="/path/to/sources.txt"
+
+cd "$REPO_DIR" || exit 1
+
+# Run Magpie in silent mode
+/usr/local/bin/magpie -s "$SOURCES" -o blocklist.txt --silent
+
+# Check if there are changes
+if [[ -n $(git status --porcelain) ]]; then
+  git add blocklist.txt
+  git commit -m "🤖 Auto-update blocklist $(date +%Y-%m-%d)"
+  git push origin main
+fi
+```
+
+**Cronjob:**
+```bash
+# Run daily at 3 AM and push to GitHub
+0 3 * * * /path/to/update-blocklists.sh >> /var/log/magpie.log 2>&1
+```
+
+### Example: Public Blocklist Repository
+
+```bash
+# Directory structure
+~/blocklist-repo/
+├── sources.txt          # Your source URLs
+├── blocklist.txt        # Generated blocklist
+├── README.md           # Description
+└── .github/
+    └── workflows/
+        └── update.yml  # Optional: GitHub Actions
+
+# sources.txt
+https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+https://v.firebog.net/hosts/static/w3kbl.txt
+https://raw.githubusercontent.com/PolishFiltersTeam/KADhosts/master/KADhosts.txt
+
+# Cronjob
+0 3 * * * cd ~/blocklist-repo && /usr/local/bin/magpie -s sources.txt -o blocklist.txt --silent && git add . && git commit -m "Update $(date +%Y-%m-%d)" && git push
 ```
 
 ## Integration with Kestrel

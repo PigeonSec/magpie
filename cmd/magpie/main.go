@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,10 +15,12 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/schollz/progressbar/v3"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/pigeonsec/magpie/internal/fetcher"
 	"github.com/pigeonsec/magpie/internal/netutil"
 	"github.com/pigeonsec/magpie/internal/stats"
+	"github.com/pigeonsec/magpie/internal/ui"
 	"github.com/pigeonsec/magpie/internal/validator"
 	"golang.org/x/term"
 )
@@ -49,6 +52,7 @@ var (
 
 	// Options
 	quiet     bool
+	silent    bool
 	showVer   bool
 	showStats bool
 )
@@ -83,6 +87,7 @@ func init() {
 	// Options flags
 	flag.BoolVar(&quiet, "quiet", false, "Quiet mode - minimal output")
 	flag.BoolVar(&quiet, "q", false, "Shorthand for -quiet")
+	flag.BoolVar(&silent, "silent", false, "Silent mode - no output (perfect for cronjobs)")
 	flag.BoolVar(&showVer, "version", false, "Show version information")
 	flag.BoolVar(&showVer, "v", false, "Shorthand for -version")
 	flag.BoolVar(&showStats, "stats", false, "Display stats table and exit")
@@ -92,55 +97,139 @@ func init() {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `%s
-Usage: magpie [OPTIONS]
+	// Beautiful styled help menu using lipgloss
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("213")).
+		Bold(true).
+		Padding(0, 1).
+		MarginBottom(1)
 
-A high-performance blocklist aggregator with smart filtering and DNS validation.
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("99")).
+		Bold(true).
+		MarginTop(1).
+		MarginBottom(0)
 
-INPUT/OUTPUT:
-  -s, -source <file>       Source file containing URLs to fetch (one per line) [REQUIRED]
-  -o, -output <file>       Output file for aggregated domains (default: aggregated.txt)
+	sectionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")).
+		PaddingLeft(2)
 
-VALIDATION:
-  -d, -dns                 Enable DNS validation - checks A, AAAA, CNAME records (default: true)
-  -H, -http                Enable HTTP validation in addition to DNS (default: false)
-  -w, -workers <n>         Number of concurrent validation workers (default: 100)
-  -r, -resolvers <list>    Comma-separated DNS resolvers (default: Cloudflare, Google, Quad9)
+	flagStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("117")).
+		Bold(true)
 
-PERFORMANCE:
-  -f, -fetch-workers <n>   Number of concurrent URL fetchers (default: 5)
-  -c, -cache               Enable DNS result caching with 5min TTL (default: true)
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245"))
 
-STATS & FILTERING:
-  --data-dir <dir>         Directory for stats.json and persistent data (default: ./data)
-  --no-tracking            Disable URL health tracking and auto-filtering
+	exampleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("228")).
+		Italic(true).
+		PaddingLeft(2)
 
-OPTIONS:
-  -q, -quiet               Quiet mode - minimal output
-  -v, -version             Show version information
-  --stats                  Display stats table and exit
-  -h, --help               Show this help message
+	commentStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true).
+		PaddingLeft(2)
 
-EXAMPLES:
-  # Basic aggregation with DNS validation
-  magpie -s sources.txt -o blocklist.txt
+	urlStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("212")).
+		Underline(true)
 
-  # Fast mode - no validation
-  magpie -s sources.txt -o blocklist.txt -dns=false
+	var b strings.Builder
 
-  # Maximum filtering - DNS + HTTP validation
-  magpie -s sources.txt -o blocklist.txt -http -w 50
+	// Logo/Title
+	b.WriteString(titleStyle.Render("🦅 MAGPIE - High-Performance Blocklist Aggregator"))
+	b.WriteString("\n\n")
+	b.WriteString(descStyle.Render("A beautiful, fast blocklist aggregator with smart filtering and DNS validation."))
+	b.WriteString("\n\n")
 
-  # High performance - more workers
-  magpie -s sources.txt -o blocklist.txt -w 200 -f 10
+	// Usage
+	b.WriteString(headerStyle.Render("USAGE:"))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("magpie") + " " + descStyle.Render("[OPTIONS]")))
+	b.WriteString("\n")
 
-  # View statistics
-  magpie --stats
+	// Input/Output
+	b.WriteString(headerStyle.Render("INPUT/OUTPUT:"))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("-s, -source") + " " + descStyle.Render("<file>       Source file containing URLs (one per line) ") + lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("[REQUIRED]")))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("-o, -output") + " " + descStyle.Render("<file>       Output file for aggregated domains (default: aggregated.txt)")))
+	b.WriteString("\n")
 
-DOCUMENTATION:
-  https://github.com/pigeonsec/magpie
+	// Validation
+	b.WriteString(headerStyle.Render("VALIDATION:"))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("-d, -dns") + "                 " + descStyle.Render("Enable DNS validation - A, AAAA, CNAME (default: true)")))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("-H, -http") + "                " + descStyle.Render("Enable HTTP validation in addition to DNS (default: false)")))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("-w, -workers") + " " + descStyle.Render("<n>         Concurrent validation workers (default: 100)")))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("-r, -resolvers") + " " + descStyle.Render("<list>    Comma-separated DNS resolvers (default: Cloudflare, Google, Quad9)")))
+	b.WriteString("\n")
 
-`, logo)
+	// Performance
+	b.WriteString(headerStyle.Render("PERFORMANCE:"))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("-f, -fetch-workers") + " " + descStyle.Render("<n> Concurrent URL fetchers (default: 5)")))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("-c, -cache") + "               " + descStyle.Render("Enable DNS caching with 5min TTL (default: true)")))
+	b.WriteString("\n")
+
+	// Stats & Filtering
+	b.WriteString(headerStyle.Render("STATS & FILTERING:"))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("--data-dir") + " " + descStyle.Render("<dir>        Directory for stats.json (default: ./data)")))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("--no-tracking") + "            " + descStyle.Render("Disable URL health tracking and auto-filtering")))
+	b.WriteString("\n")
+
+	// Options
+	b.WriteString(headerStyle.Render("OPTIONS:"))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("-q, -quiet") + "               " + descStyle.Render("Quiet mode - minimal output")))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("--silent") + "                 " + descStyle.Render("Silent mode - no output (perfect for cronjobs)")))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("-v, -version") + "             " + descStyle.Render("Show version information")))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("--stats") + "                  " + descStyle.Render("Display stats table and exit")))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(flagStyle.Render("-h, --help") + "               " + descStyle.Render("Show this help message")))
+	b.WriteString("\n")
+
+	// Examples
+	b.WriteString(headerStyle.Render("EXAMPLES:"))
+	b.WriteString("\n")
+	b.WriteString(commentStyle.Render("# Basic aggregation with DNS validation"))
+	b.WriteString("\n")
+	b.WriteString(exampleStyle.Render("magpie -s sources.txt -o blocklist.txt"))
+	b.WriteString("\n\n")
+	b.WriteString(commentStyle.Render("# Fast mode - no validation"))
+	b.WriteString("\n")
+	b.WriteString(exampleStyle.Render("magpie -s sources.txt -o blocklist.txt -dns=false"))
+	b.WriteString("\n\n")
+	b.WriteString(commentStyle.Render("# Maximum filtering - DNS + HTTP validation"))
+	b.WriteString("\n")
+	b.WriteString(exampleStyle.Render("magpie -s sources.txt -o blocklist.txt -http -w 50"))
+	b.WriteString("\n\n")
+	b.WriteString(commentStyle.Render("# Silent mode for cronjobs"))
+	b.WriteString("\n")
+	b.WriteString(exampleStyle.Render("magpie -s sources.txt -o blocklist.txt --silent"))
+	b.WriteString("\n\n")
+	b.WriteString(commentStyle.Render("# View statistics"))
+	b.WriteString("\n")
+	b.WriteString(exampleStyle.Render("magpie --stats"))
+	b.WriteString("\n")
+
+	// Documentation
+	b.WriteString(headerStyle.Render("DOCUMENTATION:"))
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(urlStyle.Render("https://github.com/pigeonsec/magpie")))
+	b.WriteString("\n\n")
+
+	fmt.Fprint(os.Stderr, b.String())
 }
 
 type AggregationStats struct {
@@ -184,13 +273,174 @@ func main() {
 		os.Exit(1)
 	}
 
+	// If silent mode, suppress all output
+	if silent {
+		// Redirect all output to /dev/null
+		log.SetOutput(io.Discard)
+		quiet = true
+	}
+
+	// Check if running in TTY (interactive terminal)
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+
+	// Use TUI for interactive terminals, fall back to logging for non-TTY
+	if !quiet && !silent && isTTY {
+		runWithTUI()
+	} else {
+		runWithLogs()
+	}
+}
+
+func runWithTUI() {
+	// Initialize and run the TUI
+	model := ui.NewAppModel()
+	program := tea.NewProgram(model, tea.WithAltScreen())
+
+	// Run aggregation in background
+	go func() {
+		ctx := context.Background()
+
+		// Check internet connection
+		time.Sleep(500 * time.Millisecond) // Give UI time to render
+		if err := netutil.CheckConnectionWithRetry(ctx, true); err != nil {
+			log.Fatalf("No internet connection: %v", err)
+		}
+		program.Send(ui.ConnectionCheckedMsg{})
+
+		// Load URLs
+		time.Sleep(300 * time.Millisecond)
+		allURLs, err := loadURLs(sourceFile)
+		if err != nil {
+			log.Fatalf("Failed to load source file: %v", err)
+		}
+
+		// Initialize stats tracker
+		var tracker *stats.Tracker
+		var urls []string
+		var filteredURLs []string
+
+		if !noTracking {
+			dataPath, err := filepath.Abs(dataDir)
+			if err != nil {
+				log.Fatalf("Failed to resolve data directory: %v", err)
+			}
+
+			tracker, err = stats.NewTracker(dataPath)
+			if err != nil {
+				log.Fatalf("Failed to initialize stats tracker: %v", err)
+			}
+
+			urls, filteredURLs = tracker.FilterURLs(allURLs)
+		} else {
+			urls = allURLs
+		}
+
+		if len(urls) == 0 {
+			log.Fatalf("No active URLs to process")
+		}
+
+		program.Send(ui.SourcesLoadedMsg{
+			SourceFile:   sourceFile,
+			TotalURLs:    len(allURLs),
+			ActiveURLs:   len(urls),
+			FilteredURLs: len(filteredURLs),
+			FetchWorkers: fetchWorkers,
+		})
+
+		// Fetch domains
+		time.Sleep(300 * time.Millisecond)
+		allDomains, duplicates, errors := fetchDomainsWithTUI(ctx, program, urls, tracker)
+
+		program.Send(ui.FetchCompleteMsg{
+			TotalDomains:      len(allDomains),
+			DuplicatesRemoved: duplicates,
+			Errors:            errors,
+		})
+
+		time.Sleep(500 * time.Millisecond)
+
+		// Validate domains
+		if enableDNS || enableHTTP {
+			program.Send(ui.ValidationStartMsg{
+				Total:   len(allDomains),
+				Workers: workers,
+			})
+
+			resolvers := strings.Split(dnsResolvers, ",")
+			for i, r := range resolvers {
+				resolvers[i] = strings.TrimSpace(r)
+			}
+
+			v := validator.NewValidatorWithResolvers(enableCache, resolvers)
+			validDomains, validCount, invalidCount := validateDomainsWithTUI(ctx, program, v, allDomains)
+
+			program.Send(ui.ValidationDoneMsg{})
+			time.Sleep(300 * time.Millisecond)
+
+			// Write output
+			if err := writeOutput(outputFile, validDomains); err != nil {
+				log.Fatalf("Failed to write output: %v", err)
+			}
+
+			// Save stats
+			if tracker != nil {
+				validationMethod := "dns"
+				if enableHTTP {
+					validationMethod = "dns+http"
+				}
+				tracker.RecordOverallValidation(validationMethod, validCount, invalidCount)
+				if err := tracker.Save(); err != nil {
+					log.Printf("Warning: Failed to save stats: %v", err)
+				}
+			}
+
+			program.Send(ui.CompletionMsg{
+				OutputFile: outputFile,
+				Valid:      validCount,
+				Invalid:    invalidCount,
+			})
+		} else {
+			// No validation - write all domains
+			validDomains := make([]string, 0, len(allDomains))
+			for domain := range allDomains {
+				validDomains = append(validDomains, domain)
+			}
+
+			if err := writeOutput(outputFile, validDomains); err != nil {
+				log.Fatalf("Failed to write output: %v", err)
+			}
+
+			if tracker != nil {
+				tracker.RecordOverallValidation("none", len(validDomains), 0)
+				if err := tracker.Save(); err != nil {
+					log.Printf("Warning: Failed to save stats: %v", err)
+				}
+			}
+
+			program.Send(ui.CompletionMsg{
+				OutputFile: outputFile,
+				Valid:      len(validDomains),
+				Invalid:    0,
+			})
+		}
+
+		time.Sleep(2 * time.Second)
+	}()
+
+	if _, err := program.Run(); err != nil {
+		log.Fatalf("Error running TUI: %v", err)
+	}
+}
+
+func runWithLogs() {
+	ctx := context.Background()
+
 	if !quiet {
 		fmt.Print(logo)
 		log.Printf("Starting aggregation from %s", sourceFile)
 	}
 
 	// Check internet connection before starting
-	ctx := context.Background()
 	if !quiet {
 		log.Printf("Checking internet connection...")
 	}
@@ -439,6 +689,163 @@ func main() {
 	printResults(aggregationStats, len(validDomains))
 }
 
+func fetchDomainsWithTUI(ctx context.Context, program *tea.Program, urls []string, tracker *stats.Tracker) (map[string]bool, int, []string) {
+	allDomains := make(map[string]bool)
+	duplicates := 0
+	var errors []string
+	var mu sync.Mutex
+
+	domainChan := make(chan string, 10000)
+	errorChan := make(chan error, len(urls))
+
+	f := fetcher.NewFetcher(30*time.Second, 3)
+
+	var fetchWg sync.WaitGroup
+	urlChan := make(chan string, len(urls))
+	fetchedCount := atomic.Int32{}
+
+	// Start fetch workers
+	for i := 0; i < fetchWorkers; i++ {
+		fetchWg.Add(1)
+		go func(workerID int) {
+			defer fetchWg.Done()
+			for url := range urlChan {
+				domains, err := f.Fetch(ctx, url)
+				if err != nil {
+					errorChan <- fmt.Errorf("failed to fetch %s: %w", url, err)
+					if tracker != nil {
+						tracker.RecordFailure(url, err.Error())
+					}
+					continue
+				}
+
+				if tracker != nil {
+					tracker.RecordSuccess(url, len(domains))
+				}
+
+				fetched := int(fetchedCount.Add(1))
+
+				// Send update to TUI
+				program.Send(ui.FetchProgressMsg{
+					URL:          url,
+					WorkerID:     workerID,
+					DomainsFound: len(domains),
+					TotalDomains: len(allDomains) + len(domains),
+					FetchedCount: fetched,
+				})
+
+				// Stream domains to channel
+				for _, domain := range domains {
+					domainChan <- domain
+				}
+			}
+		}(i)
+	}
+
+	// Collect domains in background
+	collectorDone := make(chan bool)
+	go func() {
+		for domain := range domainChan {
+			mu.Lock()
+			if allDomains[domain] {
+				duplicates++
+			} else {
+				allDomains[domain] = true
+			}
+			mu.Unlock()
+		}
+		collectorDone <- true
+	}()
+
+	// Feed URLs to workers
+	go func() {
+		for _, url := range urls {
+			urlChan <- url
+		}
+		close(urlChan)
+	}()
+
+	// Wait for all fetchers
+	fetchWg.Wait()
+	close(domainChan)
+	<-collectorDone
+	close(errorChan)
+
+	// Collect errors
+	for err := range errorChan {
+		errors = append(errors, err.Error())
+	}
+
+	return allDomains, duplicates, errors
+}
+
+func validateDomainsWithTUI(ctx context.Context, program *tea.Program, v *validator.Validator, domains map[string]bool) ([]string, int, int) {
+	var (
+		wg           sync.WaitGroup
+		validMu      sync.Mutex
+		validDomains []string
+		total        = len(domains)
+		processed    atomic.Int64
+		validCount   atomic.Int64
+		invalidCount atomic.Int64
+	)
+
+	validDomains = make([]string, 0, total*4/5)
+	domainChan := make(chan string, workers*2)
+
+	// Start workers
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			localValid := make([]string, 0, total/workers)
+
+			for domain := range domainChan {
+				valid := false
+				var err error
+
+				if enableHTTP {
+					valid, err = v.ValidateFull(ctx, domain)
+				} else if enableDNS {
+					valid, err = v.ValidateDNS(ctx, domain)
+				}
+
+				if err == nil && valid {
+					localValid = append(localValid, domain)
+					validCount.Add(1)
+				} else {
+					invalidCount.Add(1)
+				}
+
+				current := processed.Add(1)
+
+				// Update TUI every 50 domains to reduce overhead
+				if current%50 == 0 || current == int64(total) {
+					program.Send(ui.ValidationProgressMsg{
+						Current: int(current),
+						Valid:   int(validCount.Load()),
+						Invalid: int(invalidCount.Load()),
+					})
+				}
+			}
+
+			validMu.Lock()
+			validDomains = append(validDomains, localValid...)
+			validMu.Unlock()
+		}(i)
+	}
+
+	// Feed domains to workers
+	for domain := range domains {
+		domainChan <- domain
+	}
+	close(domainChan)
+
+	wg.Wait()
+
+	return validDomains, int(validCount.Load()), int(invalidCount.Load())
+}
+
 func loadURLs(path string) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -498,31 +905,21 @@ func validateDomains(ctx context.Context, v *validator.Validator, domains map[st
 	// Check if running in TTY (interactive terminal)
 	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
 
-	// Create progress bar or setup simple progress reporting
-	var bar *progressbar.ProgressBar
+	// Setup progress tracking
+	var program *tea.Program
 	startTime := time.Now()
 
 	if !quiet && isTTY {
-		// Beautiful progress bar for interactive terminals
-		bar = progressbar.NewOptions(total,
-			progressbar.OptionSetDescription(color.CyanString("🔍 Validating")),
-			progressbar.OptionSetWidth(40),
-			progressbar.OptionShowCount(),
-			progressbar.OptionShowIts(),
-			progressbar.OptionSetItsString("domains/s"),
-			progressbar.OptionThrottle(100*time.Millisecond),
-			progressbar.OptionShowElapsedTimeOnFinish(),
-			progressbar.OptionSetTheme(progressbar.Theme{
-				Saucer:        color.GreenString("█"),
-				SaucerHead:    color.GreenString("█"),
-				SaucerPadding: color.HiBlackString("░"),
-				BarStart:      color.HiBlackString("["),
-				BarEnd:        color.HiBlackString("]"),
-			}),
-			progressbar.OptionOnCompletion(func() {
-				fmt.Fprintln(os.Stderr)
-			}),
-		)
+		// Use Bubble Tea for interactive terminals
+		model := ui.NewProgressModel(total)
+		program = tea.NewProgram(model)
+
+		// Run the program in a goroutine
+		go func() {
+			if _, err := program.Run(); err != nil {
+				log.Printf("Error running progress UI: %v", err)
+			}
+		}()
 	} else if !quiet {
 		// Simple logging for non-TTY (pipes, files, cronjobs)
 		log.Printf("Starting validation of %d domains with %d workers...", total, workers)
@@ -560,9 +957,13 @@ func validateDomains(ctx context.Context, v *validator.Validator, domains map[st
 				current := processed.Add(1)
 
 				if !quiet {
-					if bar != nil {
-						// TTY: Update progress bar
-						bar.Add(1)
+					if program != nil && isTTY {
+						// TTY: Update Bubble Tea UI
+						program.Send(ui.UpdateProgress(
+							int(current),
+							int(validCount.Load()),
+							int(invalidCount.Load()),
+						))
 					} else if !isTTY {
 						// Non-TTY: Log every 10k domains
 						if current%10000 == 0 || current == int64(total) {
@@ -593,8 +994,9 @@ func validateDomains(ctx context.Context, v *validator.Validator, domains map[st
 
 	wg.Wait()
 
-	if bar != nil {
-		bar.Finish()
+	if program != nil {
+		program.Send(ui.SendDone())
+		program.Wait()
 	}
 
 	return validDomains
@@ -754,81 +1156,69 @@ func printColorLine(borderColor, textColor *color.Color, label, value string) {
 
 func displayStatsTable(tracker *stats.Tracker) {
 	if len(tracker.Stats) == 0 {
-		fmt.Println("No stats available yet. Run an aggregation first.")
+		noStatsStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Italic(true).
+			Padding(1, 2)
+		fmt.Println(noStatsStyle.Render("No stats available yet. Run an aggregation first."))
 		return
 	}
 
-	// Color definitions
-	green := color.New(color.FgGreen, color.Bold)
-	red := color.New(color.FgRed, color.Bold)
-	cyan := color.New(color.FgCyan, color.Bold)
-	magenta := color.New(color.FgMagenta, color.Bold)
+	// Style definitions
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("213")).
+		Bold(true).
+		Padding(1, 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("99"))
 
-	fmt.Println()
-	cyan.Println(strings.Repeat("=", 120))
-	cyan.Print("📊 ")
-	magenta.Print("URL Statistics")
-	fmt.Println()
-	cyan.Println(strings.Repeat("=", 120))
+	urlStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86"))
 
-	// Table header
-	fmt.Printf("%-50s | %8s | %8s | %10s | %12s | %20s | %8s\n",
-		"URL", "Domains", "Success", "Failed", "Status", "Last Checked", "Size")
-	cyan.Println(strings.Repeat("-", 120))
+	labelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240"))
 
-	// Sort URLs for consistent output
-	var urls []string
-	for url := range tracker.Stats {
-		urls = append(urls, url)
-	}
+	numberStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("228")).
+		Bold(true)
 
-	// Display each URL's stats
-	for _, url := range urls {
-		stat := tracker.Stats[url]
+	successStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("10")).
+		Bold(true)
 
-		// Truncate URL if too long
-		displayURL := url
-		if len(displayURL) > 48 {
-			displayURL = displayURL[:45] + "..."
-		}
+	failureStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("9")).
+		Bold(true)
 
-		// Status indicator
-		isFiltered := stat.Blacklisted || stat.FailureCount >= stats.MaxFailures
-		statusText := "✓ Active"
-		if isFiltered {
-			statusText = "✗ Filtered"
-		}
+	activeStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("10")).
+		Bold(true)
 
-		// Format last checked time
-		lastChecked := "-"
-		if !stat.LastChecked.IsZero() {
-			lastChecked = formatTimeSince(stat.LastChecked)
-		}
+	filteredStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("9")).
+		Bold(true)
 
-		// Human readable size
-		humanSize := formatSize(stat.TotalDomains)
+	timeStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Italic(true)
 
-		// Print with colors
-		fmt.Printf("%-50s | %8d | ", displayURL, stat.TotalDomains)
-		green.Printf("%8d", stat.SuccessCount)
-		fmt.Print(" | ")
-		if stat.FailureCount > 0 {
-			red.Printf("%8d", stat.FailureCount)
-		} else {
-			fmt.Printf("%8d", stat.FailureCount)
-		}
-		fmt.Print(" | ")
-		if isFiltered {
-			red.Printf("%12s", statusText)
-		} else {
-			green.Printf("%12s", statusText)
-		}
-		fmt.Printf(" | %20s | %8s\n", lastChecked, humanSize)
-	}
+	summaryLabelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("117")).
+		Bold(true).
+		Width(18)
 
-	cyan.Println(strings.Repeat("=", 120))
+	summaryValueStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")).
+		Bold(true)
 
-	// Summary statistics
+	var b strings.Builder
+
+	// Title
+	b.WriteString("\n")
+	b.WriteString(titleStyle.Render("📊 BLOCKLIST STATISTICS"))
+	b.WriteString("\n\n")
+
+	// Calculate summary first
 	totalURLs := len(tracker.Stats)
 	activeURLs := 0
 	filteredURLs := 0
@@ -849,29 +1239,116 @@ func displayStatsTable(tracker *stats.Tracker) {
 		}
 	}
 
-	fmt.Println()
-	magenta.Println("Summary:")
-	fmt.Print("  Total URLs:      ")
-	cyan.Println(totalURLs)
-	fmt.Print("  Active:          ")
-	green.Println(activeURLs)
-	fmt.Print("  Filtered:        ")
+	// Sort URLs for consistent output
+	var urls []string
+	for url := range tracker.Stats {
+		urls = append(urls, url)
+	}
+
+	// Compact card-based layout for each URL
+	for _, url := range urls {
+		stat := tracker.Stats[url]
+
+		// Truncate URL if too long (40 chars for smaller screens)
+		displayURL := url
+		if len(displayURL) > 40 {
+			displayURL = displayURL[:37] + "..."
+		}
+
+		// Status indicator
+		isFiltered := stat.Blacklisted || stat.FailureCount >= stats.MaxFailures
+		var statusText string
+		if isFiltered {
+			statusText = filteredStyle.Render("✗ Filtered")
+		} else {
+			statusText = activeStyle.Render("✓ Active")
+		}
+
+		// Format last checked time
+		lastChecked := "-"
+		if !stat.LastChecked.IsZero() {
+			lastChecked = formatTimeSince(stat.LastChecked)
+		}
+
+		// Build compact card
+		cardStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			Padding(0, 1)
+
+		var card strings.Builder
+
+		// URL line
+		card.WriteString(urlStyle.Bold(true).Render(displayURL))
+		card.WriteString("  ")
+		card.WriteString(statusText)
+		card.WriteString("\n")
+
+		// Stats line
+		card.WriteString(labelStyle.Render("Domains: "))
+		card.WriteString(numberStyle.Render(formatSize(stat.TotalDomains)))
+		card.WriteString(labelStyle.Render("  •  Success: "))
+		card.WriteString(successStyle.Render(fmt.Sprintf("%d", stat.SuccessCount)))
+		card.WriteString(labelStyle.Render("  •  Failed: "))
+		if stat.FailureCount > 0 {
+			card.WriteString(failureStyle.Render(fmt.Sprintf("%d", stat.FailureCount)))
+		} else {
+			card.WriteString(labelStyle.Render("0"))
+		}
+		card.WriteString(labelStyle.Render("  •  "))
+		card.WriteString(timeStyle.Render(lastChecked))
+
+		b.WriteString(cardStyle.Render(card.String()))
+		b.WriteString("\n")
+	}
+
+	// Summary box
+	b.WriteString("\n")
+	summaryStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("99")).
+		Padding(1, 2).
+		MarginTop(1)
+
+	var summary strings.Builder
+	summary.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render("📈 Summary"))
+	summary.WriteString("\n\n")
+
+	summary.WriteString(summaryLabelStyle.Render("Total URLs:"))
+	summary.WriteString(summaryValueStyle.Render(fmt.Sprintf("%d", totalURLs)))
+	summary.WriteString("\n")
+
+	summary.WriteString(summaryLabelStyle.Render("Active:"))
+	summary.WriteString(activeStyle.Render(fmt.Sprintf("%d", activeURLs)))
+	summary.WriteString("\n")
+
+	summary.WriteString(summaryLabelStyle.Render("Filtered:"))
 	if filteredURLs > 0 {
-		red.Println(filteredURLs)
+		summary.WriteString(filteredStyle.Render(fmt.Sprintf("%d", filteredURLs)))
 	} else {
-		fmt.Println(filteredURLs)
+		summary.WriteString(summaryValueStyle.Render(fmt.Sprintf("%d", filteredURLs)))
 	}
-	fmt.Print("  Total Successes: ")
-	green.Println(totalSuccess)
-	fmt.Print("  Total Failures:  ")
+	summary.WriteString("\n")
+
+	summary.WriteString(summaryLabelStyle.Render("Total Successes:"))
+	summary.WriteString(successStyle.Render(fmt.Sprintf("%d", totalSuccess)))
+	summary.WriteString("\n")
+
+	summary.WriteString(summaryLabelStyle.Render("Total Failures:"))
 	if totalFailures > 0 {
-		red.Println(totalFailures)
+		summary.WriteString(failureStyle.Render(fmt.Sprintf("%d", totalFailures)))
 	} else {
-		fmt.Println(totalFailures)
+		summary.WriteString(summaryValueStyle.Render(fmt.Sprintf("%d", totalFailures)))
 	}
-	fmt.Print("  Total Domains:   ")
-	magenta.Println(formatSize(totalDomains))
-	fmt.Println()
+	summary.WriteString("\n")
+
+	summary.WriteString(summaryLabelStyle.Render("Total Domains:"))
+	summary.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render(formatSize(totalDomains)))
+
+	b.WriteString(summaryStyle.Render(summary.String()))
+	b.WriteString("\n\n")
+
+	fmt.Print(b.String())
 }
 
 func formatTimeSince(t time.Time) string {

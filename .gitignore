@@ -36,7 +36,6 @@ aggregated.txt
 blocklist.txt
 validated.txt
 quick-list.txt
-*.txt
 !test_sources.txt
 !simple_test.txt
 

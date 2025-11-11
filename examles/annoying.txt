@@ -1,0 +1,215 @@
+# ===================================================================
+# SAFE ADS & TRACKING BLOCKLISTS
+# ===================================================================
+
+# ===================================================================
+# PRIMARY RECOMMENDATION - START HERE (SAFE & EFFECTIVE)
+# ===================================================================
+
+# OISD (Open Internet Security Database) - BIG LIST (RECOMMENDED FIRST CHOICE)
+# One of the most curated lists, prioritizes functionality over aggressive blocking
+# Explicitly avoids blocking: YouTube, Facebook, Gmail, Outlook, Reddit, Amazon, etc.
+# Does NOT block YouTube ads (DNS level cannot block them)
+# ~207,844 entries - balanced approach
+# No breakage reported on major sites
+# Format: Adblock compatible (wildcard rules)
+# Updates: Every 50 minutes
+https://big.oisd.nl/
+
+# ===================================================================
+# HAGEZI LISTS - SAFE VARIANTS (WELL-TESTED COMMUNITY FAVORITE)
+# ===================================================================
+
+# HaGeZi Multi - NORMAL (RECOMMENDED BALANCED OPTION)
+# ~260K domains - excellent balance between blocking and functionality
+# Tested extensively, minimal false positives
+# Does not break YouTube, Facebook, LinkedIn, Google Shopping
+# Format: Adblock compatible
+# Updates: Daily
+https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/multi.txt
+
+# HaGeZi Multi - PRO (Enhanced, slightly more aggressive)
+# ~380K domains - blocks more ads/trackers than Normal
+# Still safe for most users, rare false positives
+# Can cause some app breakage (Swiggy, DoorDash noted by users)
+# Format: Adblock compatible
+# Updates: Daily
+https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt
+
+# HaGeZi Multi - PRO++ (Most aggressive safe option)
+# ~500K domains - maximum ad/tracking blocking
+# Includes googletagmanager (rare site breakage)
+# Only use if you understand potential for edge case breakage
+# Format: Adblock compatible
+# Updates: Daily
+https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro-plus-plus.txt
+
+# HaGeZi Multi - LIGHT (LIGHTWEIGHT - Low-resource systems)
+# ~140K domains - provides ~85% of tracking protection
+# Perfect for Raspberry Pi Zero, Docker containers, low-RAM devices
+# No functionality breakage reported
+# Format: Adblock compatible
+# Updates: Daily
+https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt
+
+# ===================================================================
+# 1HOSTS BLOCKLISTS - SAFE & EFFECTIVE
+# ===================================================================
+
+# 1Hosts - LITE (RECOMMENDED SAFE ALTERNATIVE)
+# ~300K domains - excellent balance
+# Blocks ads, analytics, trackers without breaking functionality
+# Does not block YouTube ads (DNS level limitation)
+# Active maintenance, high quality
+# Format: Adblock compatible (wildcard rules)
+# Updates: Every 30 minutes
+https://raw.githubusercontent.com/badmojr/1Hosts/master/Lite/adblock.txt
+
+# 1Hosts - MINI (ULTRA LIGHTWEIGHT)
+# ~100K domains - very lenient approach
+# For users who want to earn app rewards or minimize blocking
+# Minimal functional impact guaranteed
+# Format: Adblock compatible
+# Updates: Regular
+https://raw.githubusercontent.com/badmojr/1Hosts/master/Mini/adblock.txt
+
+# WARNING: 1Hosts - XTRA (NOT RECOMMENDED - HIGH BREAKAGE)
+# Blocks too many legitimate domains (LinkedIn, news sites, etc.)
+# Requires extensive whitelisting
+# Only for expert users willing to troubleshoot constantly
+
+# ===================================================================
+# EASYLIST FAMILY - INDUSTRY STANDARD (SAFE WHEN USED CORRECTLY)
+# ===================================================================
+
+# EasyList - STANDARD (Industry-standard ad blocking list)
+# ~60K+ rules - used in uBlock Origin by default
+# Format: Adblock format (filter lists, not just domains)
+# NOTE: Some integration with EasyPrivacy causes YouTube view count issues
+# Use EasyList alone (not with EasyPrivacy) at DNS level
+# Updates: Regularly
+https://easylist.to/easylist/easylist.txt
+
+# EasyList - ADBLOCK Format for Pi-hole
+# Compatible with Pi-hole/AdGuard Home
+# Excludes problematic rules from EasyPrivacy
+# Format: Adblock compatible (wildcard rules)
+# Updates: Regularly
+https://v.firebog.net/hosts/Easylist.txt
+
+# EasyPrivacy (TRACKER BLOCKING - USE WITH CAUTION)
+# Known to break YouTube view counting via API blocking
+# If used, should be at browser level (uBlock Origin), not DNS level
+# At DNS level, use HaGeZi tracking filter instead
+# Format: Adblock compatible
+https://v.firebog.net/hosts/Easyprivacy.txt
+
+# ===================================================================
+# SAFE COMPREHENSIVE LISTS - TRUSTED SOURCES
+# ===================================================================
+
+# StevenBlack Unified Hosts - STANDARD (DEFAULT PIHOLE LIST)
+# Consolidates multiple reputable sources
+# Well-maintained, active community
+# Default list in Pi-hole
+# Format: Hosts file compatible
+# Updates: Multiple times weekly
+https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+
+# AdGuard DNS Filter (Official - SAFE & EFFECTIVE)
+# Official AdGuard blocklist for ads and trackers
+# ~50K rules - designed for DNS-level blocking
+# No known breakage of legitimate services
+# Format: Adblock compatible (hosts format also available)
+# Updates: Regular
+https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
+
+# AdGuard DNS Filter - Popup Hosts
+# Supplements main DNS filter with popup blockers
+# Safe for all major services
+# Format: Hosts file compatible
+https://adguardteam.github.io/HostlistsRegistry/assets/filter_59.txt
+
+# ===================================================================
+# SPECIALIZED SAFE LISTS (CURATED & LOW FALSE POSITIVE)
+# ===================================================================
+
+# Developer Dan's Ads & Tracking - Extended
+# 429,286+ hosts - programmatically expanded list
+# Recommended by many users as safe
+# Actively maintained
+# Format: Hosts file compatible
+# Updates: Regular (last updated November 2023)
+https://www.github.developerdan.com/hosts/lists/ads-and-tracking-extended.txt
+
+# KADhosts - Polish Filters Team
+# Blocks ads, tracking, malware (comprehensive)
+# Proven safe across European networks
+# Format: Hosts file compatible
+# Updates: Regular
+https://raw.githubusercontent.com/PolishFiltersTeam/KADhosts/master/KADomains.txt
+
+# AdAway Default Hosts
+# Lightweight, well-tested list
+# Used by AdAway Android ad-blocker
+# Safe for most users
+# Format: Hosts file compatible
+# Updates: Regular
+https://adaway.org/hosts.txt
+
+# Admiral - Ad & Tracker Blocklist
+# Lightweight alternative to comprehensive lists
+# Focuses on known bad domains
+# Format: Hosts file compatible (via Firebog)
+# Updates: Regular
+https://v.firebog.net/hosts/Admiral.txt
+
+# ===================================================================
+# PRIVACY & TRACKING SPECIFIC (SAFE OPTIONS)
+# ===================================================================
+
+# WindowsSpyBlocker - SPY.TXT (Blocks Windows Telemetry)
+# Specifically targets Windows 10/11 telemetry
+# Format: DNSCRYPT (compatible with Pi-hole/AdGuard)
+# NOTE: May conflict with Windows Update (requires whitelisting winupdate.com)
+# Use only if you want to block Microsoft telemetry
+# Updates: Regular
+https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/dnscrypt/spy.txt
+
+# FirstParty Trackers - Hostfiles.frogeye.fr
+# Blocks trackers that use first-party domains (harder to block)
+# Example: analytics.yoursite.com (first-party tracker)
+# Lower false positive rate than some alternatives
+# Format: Hosts file compatible
+# Updates: Regular
+https://hostfiles.frogeye.fr/firstparty-trackers-hosts.txt
+
+# ===================================================================
+# SUPPLEMENTARY SAFE LISTS (ADD TO PRIMARY CHOICE)
+# ===================================================================
+
+# Firebog - ADD.SPAM (Additional spam domains)
+# Lightweight supplement to main blocklist
+# Format: Hosts file compatible
+# Updates: Regular
+https://raw.githubusercontent.com/FadeMind/hosts.extras/master/add.Spam/hosts
+
+# Firebog - W3KBL (W3 Known Bad List)
+# Community-curated bad domains
+# Format: Hosts file compatible
+# Updates: Regular
+https://v.firebog.net/hosts/static/w3kbl.txt
+
+# Prigent-Ads - Additional ad domains
+# Supplementary ad-blocking list
+# Format: Hosts file compatible
+# Updates: Regular
+https://v.firebog.net/hosts/Prigent-Ads.txt
+
+# Nextdns Ads & Trackers (Community-maintained)
+# Based on Nextdns's research
+# Good supplement to primary list
+# Format: Hosts file compatible
+# Updates: Regular
+https://cdn.jsdelivr.net/gh/nextdns/blocklists@latest/ads.txt
+
