@@ -30,10 +30,10 @@ Magpie is a high-performance blocklist aggregator that fetches, validates, and c
 # From source
 git clone https://github.com/pigeonsec/magpie.git
 cd magpie
-go build -o magpie ./cmd/aggregator
+go build -o magpie ./cmd/magpie
 
 # Quick install
-go install github.com/pigeonsec/magpie/cmd/aggregator@latest
+go install github.com/pigeonsec/magpie/cmd/magpie@latest
 ```
 
 ## Quick Start
