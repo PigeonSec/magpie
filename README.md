@@ -390,14 +390,13 @@ Contributions are welcome! Please submit a Pull Request.
 | https://raw.githubusercontent.com/PolishFilters... | 39.3K | ✅ Active | 1 | 0 | 2025-11-10 22:22 |
 | https://winhelp2002.mvps.org/hosts.txt | 8.6K | ✅ Active | 1 | 0 | 2025-11-10 22:22 |
 | https://v.firebog.net/hosts/neohostsbasic.txt | 2.4K | ✅ Active | 1 | 0 | 2025-11-10 22:22 |
-| https://raw.githubusercontent.com/FadeMind/host... | 31 | ✅ Active | 1 | 0 | 2025-11-10 22:22 |
+| https://raw.githubusercontent.com/FadeMind/host... | 31 | ✅ Active | 2 | 0 | 2025-11-11 17:35 |
 
 **Summary:** 5 total URLs | 5 active | 0 filtered | ~117.6K total domains
 
-*Last updated: 2025-11-10 21:32 UTC*
+*Last updated: 2025-11-11 16:42 UTC*
 
 <!-- END_STATS -->
-
 ---
 
 ## License
