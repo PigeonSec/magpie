@@ -25,19 +25,35 @@ type URLStats struct {
 	LastError        string    `json:"last_error,omitempty"`
 	Blacklisted      bool      `json:"blacklisted"`
 	BlacklistedAt    time.Time `json:"blacklisted_at,omitempty"`
-	TotalDomains     int       `json:"total_domains"`       // Total domains fetched
-	ValidDomains     int       `json:"valid_domains"`       // Domains that passed validation
-	InvalidDomains   int       `json:"invalid_domains"`     // Domains that failed validation
-	FilteredDomains  int       `json:"filtered_domains"`    // Domains removed (invalid)
-	ValidationMethod string    `json:"validation_method"`   // "none", "dns", "http", "dns+http"
+	ValidationMethod string    `json:"validation_method,omitempty"` // "none", "dns", "http", "dns+http"
 	LastChecked      time.Time `json:"last_checked"`
+}
+
+// GlobalStats tracks aggregate statistics from the last run
+type GlobalStats struct {
+	LastRun            time.Time `json:"last_run"`
+	TotalURLsFetched   int       `json:"total_urls_fetched"`    // URLs successfully fetched
+	TotalURLsFailed    int       `json:"total_urls_failed"`     // URLs that failed
+	TotalDomainsRaw    int       `json:"total_domains_raw"`     // Total domains downloaded (with duplicates)
+	TotalDomainsUnique int       `json:"total_domains_unique"`  // Unique domains after deduplication
+	DuplicatesRemoved  int       `json:"duplicates_removed"`    // Domains removed as duplicates
+	ValidDomains       int       `json:"valid_domains"`         // Domains that passed validation
+	InvalidDomains     int       `json:"invalid_domains"`       // Domains that failed validation
+	ValidationMethod   string    `json:"validation_method"`     // "none", "dns", "http", "dns+http"
+}
+
+// StatsData represents the complete stats file structure
+type StatsData struct {
+	Sources map[string]*URLStats `json:"sources"`
+	Global  *GlobalStats         `json:"global,omitempty"`
 }
 
 // Tracker manages URL statistics
 type Tracker struct {
-	DataDir string
-	Stats   map[string]*URLStats
-	mu      sync.RWMutex
+	DataDir      string
+	Stats        map[string]*URLStats
+	GlobalStats  *GlobalStats
+	mu           sync.RWMutex
 }
 
 // NewTracker creates a new stats tracker
@@ -74,12 +90,23 @@ func (t *Tracker) Load() error {
 		return err
 	}
 
+	// Try new format first
+	var statsData StatsData
+	if err := json.Unmarshal(data, &statsData); err == nil && statsData.Sources != nil {
+		// New format
+		t.Stats = statsData.Sources
+		t.GlobalStats = statsData.Global
+		return nil
+	}
+
+	// Fall back to old format (map[string]*URLStats)
 	var stats map[string]*URLStats
 	if err := json.Unmarshal(data, &stats); err != nil {
 		return err
 	}
 
 	t.Stats = stats
+	t.GlobalStats = nil // No global stats in old format
 	return nil
 }
 
@@ -89,7 +116,14 @@ func (t *Tracker) Save() error {
 	defer t.mu.RUnlock()
 
 	statsPath := filepath.Join(t.DataDir, StatsFile)
-	data, err := json.MarshalIndent(t.Stats, "", "  ")
+
+	// Use new format with sources and global stats
+	statsData := StatsData{
+		Sources: t.Stats,
+		Global:  t.GlobalStats,
+	}
+
+	data, err := json.MarshalIndent(statsData, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -109,7 +143,7 @@ func (t *Tracker) IsBlacklisted(url string) bool {
 }
 
 // RecordSuccess updates stats for a successful fetch
-func (t *Tracker) RecordSuccess(url string, domainCount int) {
+func (t *Tracker) RecordSuccess(url string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -122,7 +156,6 @@ func (t *Tracker) RecordSuccess(url string, domainCount int) {
 	stat.SuccessCount++
 	stat.LastSuccess = time.Now()
 	stat.LastChecked = time.Now()
-	stat.TotalDomains = domainCount
 	stat.LastError = ""
 
 	// Reset blacklist if it was previously blacklisted but now works
@@ -156,8 +189,8 @@ func (t *Tracker) RecordFailure(url string, errorMsg string) {
 	}
 }
 
-// RecordValidation updates validation statistics for a URL
-func (t *Tracker) RecordValidation(url string, validCount, invalidCount int, method string) {
+// RecordValidation updates validation method for a URL
+func (t *Tracker) RecordValidation(url string, method string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -167,36 +200,29 @@ func (t *Tracker) RecordValidation(url string, validCount, invalidCount int, met
 		t.Stats[url] = stat
 	}
 
-	stat.ValidDomains = validCount
-	stat.InvalidDomains = invalidCount
-	stat.FilteredDomains = invalidCount // Domains removed due to validation failure
 	stat.ValidationMethod = method
 }
 
-// RecordOverallValidation updates validation method for all successfully fetched URLs
-func (t *Tracker) RecordOverallValidation(method string, totalValid, totalInvalid int) {
+// RecordGlobalStats updates the global statistics from the last run
+func (t *Tracker) RecordGlobalStats(urlsFetched, urlsFailed, domainsRaw, domainsUnique, duplicates, valid, invalid int, method string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Calculate proportional stats for each URL based on their domain count
-	totalDomains := 0
-	for _, stat := range t.Stats {
-		if stat.SuccessCount > 0 {
-			totalDomains += stat.TotalDomains
-		}
+	t.GlobalStats = &GlobalStats{
+		LastRun:            time.Now(),
+		TotalURLsFetched:   urlsFetched,
+		TotalURLsFailed:    urlsFailed,
+		TotalDomainsRaw:    domainsRaw,
+		TotalDomainsUnique: domainsUnique,
+		DuplicatesRemoved:  duplicates,
+		ValidDomains:       valid,
+		InvalidDomains:     invalid,
+		ValidationMethod:   method,
 	}
 
-	if totalDomains == 0 {
-		return
-	}
-
-	// Distribute validation results proportionally
+	// Update validation method for all successfully fetched URLs
 	for _, stat := range t.Stats {
-		if stat.SuccessCount > 0 {
-			proportion := float64(stat.TotalDomains) / float64(totalDomains)
-			stat.ValidDomains = int(float64(totalValid) * proportion)
-			stat.InvalidDomains = int(float64(totalInvalid) * proportion)
-			stat.FilteredDomains = stat.InvalidDomains
+		if stat.SuccessCount > 0 && stat.LastSuccess.After(time.Now().Add(-24*time.Hour)) {
 			stat.ValidationMethod = method
 		}
 	}

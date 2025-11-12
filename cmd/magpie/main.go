@@ -382,13 +382,25 @@ func runWithTUI() {
 				log.Fatalf("Failed to write output: %v", err)
 			}
 
-			// Save stats
+			// Save stats with global metrics
 			if tracker != nil {
 				validationMethod := "dns"
 				if enableHTTP {
 					validationMethod = "dns+http"
 				}
-				tracker.RecordOverallValidation(validationMethod, validCount, invalidCount)
+
+				// Record global stats from this run
+				tracker.RecordGlobalStats(
+					len(urls),              // URLs fetched
+					len(errors),            // URLs failed
+					len(allDomains)+duplicates, // Raw domains (including duplicates)
+					len(allDomains),        // Unique domains
+					duplicates,             // Duplicates removed
+					validCount,             // Valid domains
+					invalidCount,           // Invalid domains
+					validationMethod,
+				)
+
 				if err := tracker.Save(); err != nil {
 					log.Printf("Warning: Failed to save stats: %v", err)
 				}
@@ -411,7 +423,18 @@ func runWithTUI() {
 			}
 
 			if tracker != nil {
-				tracker.RecordOverallValidation("none", len(validDomains), 0)
+				// Record global stats from this run (no validation)
+				tracker.RecordGlobalStats(
+					len(urls),              // URLs fetched
+					len(errors),            // URLs failed
+					len(allDomains)+duplicates, // Raw domains (including duplicates)
+					len(allDomains),        // Unique domains
+					duplicates,             // Duplicates removed
+					len(validDomains),      // Valid domains (all)
+					0,                      // Invalid domains (none)
+					"none",
+				)
+
 				if err := tracker.Save(); err != nil {
 					log.Printf("Warning: Failed to save stats: %v", err)
 				}
@@ -568,7 +591,7 @@ func runWithLogs() {
 
 				// Record success in stats tracker
 				if tracker != nil {
-					tracker.RecordSuccess(url, len(domains))
+					tracker.RecordSuccess(url)
 				}
 
 				if !quiet {
@@ -649,13 +672,23 @@ func runWithLogs() {
 			log.Printf("Validation complete: %d valid, %d invalid", aggregationStats.DomainsValid, aggregationStats.DomainsInvalid)
 		}
 
-		// Record validation stats
+		// Record global stats
 		if tracker != nil {
 			validationMethod := "dns"
 			if enableHTTP {
 				validationMethod = "dns+http"
 			}
-			tracker.RecordOverallValidation(validationMethod, aggregationStats.DomainsValid, aggregationStats.DomainsInvalid)
+
+			tracker.RecordGlobalStats(
+				aggregationStats.URLsFetched,
+				len(aggregationStats.Errors),
+				aggregationStats.DomainsFound+aggregationStats.DuplicatesFound,
+				aggregationStats.DomainsFound,
+				aggregationStats.DuplicatesFound,
+				aggregationStats.DomainsValid,
+				aggregationStats.DomainsInvalid,
+				validationMethod,
+			)
 		}
 	} else {
 		// No validation - all domains are valid
@@ -665,9 +698,18 @@ func runWithLogs() {
 		}
 		aggregationStats.DomainsValid = len(validDomains)
 
-		// Record that no validation was performed
+		// Record global stats (no validation)
 		if tracker != nil {
-			tracker.RecordOverallValidation("none", len(validDomains), 0)
+			tracker.RecordGlobalStats(
+				aggregationStats.URLsFetched,
+				len(aggregationStats.Errors),
+				aggregationStats.DomainsFound+aggregationStats.DuplicatesFound,
+				aggregationStats.DomainsFound,
+				aggregationStats.DuplicatesFound,
+				len(validDomains),
+				0,
+				"none",
+			)
 		}
 	}
 
@@ -720,7 +762,7 @@ func fetchDomainsWithTUI(ctx context.Context, program *tea.Program, urls []strin
 				}
 
 				if tracker != nil {
-					tracker.RecordSuccess(url, len(domains))
+					tracker.RecordSuccess(url)
 				}
 
 				fetched := int(fetchedCount.Add(1))
@@ -1224,7 +1266,6 @@ func displayStatsTable(tracker *stats.Tracker) {
 	filteredURLs := 0
 	totalSuccess := 0
 	totalFailures := 0
-	totalDomains := 0
 
 	for _, stat := range tracker.Stats {
 		if stat.Blacklisted || stat.FailureCount >= stats.MaxFailures {
@@ -1234,9 +1275,6 @@ func displayStatsTable(tracker *stats.Tracker) {
 		}
 		totalSuccess += stat.SuccessCount
 		totalFailures += stat.FailureCount
-		if stat.SuccessCount > 0 {
-			totalDomains += stat.TotalDomains
-		}
 	}
 
 	// Sort URLs for consistent output
@@ -1285,9 +1323,7 @@ func displayStatsTable(tracker *stats.Tracker) {
 		card.WriteString("\n")
 
 		// Stats line
-		card.WriteString(labelStyle.Render("Domains: "))
-		card.WriteString(numberStyle.Render(formatSize(stat.TotalDomains)))
-		card.WriteString(labelStyle.Render("  •  Success: "))
+		card.WriteString(labelStyle.Render("Success: "))
 		card.WriteString(successStyle.Render(fmt.Sprintf("%d", stat.SuccessCount)))
 		card.WriteString(labelStyle.Render("  •  Failed: "))
 		if stat.FailureCount > 0 {
@@ -1297,6 +1333,10 @@ func displayStatsTable(tracker *stats.Tracker) {
 		}
 		card.WriteString(labelStyle.Render("  •  "))
 		card.WriteString(timeStyle.Render(lastChecked))
+		if stat.ValidationMethod != "" {
+			card.WriteString(labelStyle.Render("  •  "))
+			card.WriteString(numberStyle.Render(stat.ValidationMethod))
+		}
 
 		b.WriteString(cardStyle.Render(card.String()))
 		b.WriteString("\n")
@@ -1340,12 +1380,65 @@ func displayStatsTable(tracker *stats.Tracker) {
 	} else {
 		summary.WriteString(summaryValueStyle.Render(fmt.Sprintf("%d", totalFailures)))
 	}
-	summary.WriteString("\n")
-
-	summary.WriteString(summaryLabelStyle.Render("Total Domains:"))
-	summary.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render(formatSize(totalDomains)))
 
 	b.WriteString(summaryStyle.Render(summary.String()))
+	b.WriteString("\n")
+
+	// Global stats from last run (if available)
+	if tracker.GlobalStats != nil {
+		b.WriteString("\n")
+		globalStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("213")).
+			Padding(1, 2).
+			MarginTop(1)
+
+		var globalSummary strings.Builder
+		globalSummary.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render("📊 Last Run Stats"))
+		globalSummary.WriteString("\n\n")
+
+		globalSummary.WriteString(summaryLabelStyle.Render("Run Time:"))
+		globalSummary.WriteString(timeStyle.Render(formatTimeSince(tracker.GlobalStats.LastRun)))
+		globalSummary.WriteString("\n")
+
+		globalSummary.WriteString(summaryLabelStyle.Render("URLs Fetched:"))
+		globalSummary.WriteString(successStyle.Render(fmt.Sprintf("%d", tracker.GlobalStats.TotalURLsFetched)))
+		globalSummary.WriteString("\n")
+
+		if tracker.GlobalStats.TotalURLsFailed > 0 {
+			globalSummary.WriteString(summaryLabelStyle.Render("URLs Failed:"))
+			globalSummary.WriteString(failureStyle.Render(fmt.Sprintf("%d", tracker.GlobalStats.TotalURLsFailed)))
+			globalSummary.WriteString("\n")
+		}
+
+		globalSummary.WriteString(summaryLabelStyle.Render("Domains Raw:"))
+		globalSummary.WriteString(numberStyle.Render(formatSize(tracker.GlobalStats.TotalDomainsRaw)))
+		globalSummary.WriteString("\n")
+
+		globalSummary.WriteString(summaryLabelStyle.Render("Domains Unique:"))
+		globalSummary.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render(formatSize(tracker.GlobalStats.TotalDomainsUnique)))
+		globalSummary.WriteString("\n")
+
+		globalSummary.WriteString(summaryLabelStyle.Render("Duplicates:"))
+		globalSummary.WriteString(labelStyle.Render(formatSize(tracker.GlobalStats.DuplicatesRemoved)))
+		globalSummary.WriteString("\n")
+
+		if tracker.GlobalStats.ValidationMethod != "none" {
+			globalSummary.WriteString(summaryLabelStyle.Render("Valid Domains:"))
+			globalSummary.WriteString(successStyle.Render(formatSize(tracker.GlobalStats.ValidDomains)))
+			globalSummary.WriteString("\n")
+
+			globalSummary.WriteString(summaryLabelStyle.Render("Invalid Domains:"))
+			globalSummary.WriteString(failureStyle.Render(formatSize(tracker.GlobalStats.InvalidDomains)))
+			globalSummary.WriteString("\n")
+		}
+
+		globalSummary.WriteString(summaryLabelStyle.Render("Validation:"))
+		globalSummary.WriteString(numberStyle.Render(tracker.GlobalStats.ValidationMethod))
+
+		b.WriteString(globalStyle.Render(globalSummary.String()))
+	}
+
 	b.WriteString("\n\n")
 
 	fmt.Print(b.String())
